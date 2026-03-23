@@ -1,0 +1,238 @@
+---
+title: "heatmap S1 ENDseq hDNA
+output: 
+date: "2026-02-20"
+---
+
+######################################################################################################
+# Gustave Roussy (GR) | CNRS UMR 9019, Genome dynamics and instability Lab - Gabriel MATOS RODRIGUES 
+# Developed by BEKKOUCHE Louisa - bekkouche.louisa@gmail.com                                 
+# Edited by: Genome dynamics and instability Lab                                     
+# v.0.1 - 2025/12/18 (for Human genome) | v.0.2 2026/02/16 (for Mouse genenome)	     
+# R version 4.5.2 (2025-10-31)                                                       
+# MIT licence - Copyright (c) 2025 Gabriel Matos Rodrigues			                     
+# run it in a env conda for R version and enjoy your results! :)                     
+#######################################################################################################
+
+```{r}
+
+#######################################################################################################
+
+# Heatmap generation of BigWig signals around genomic regions
+# - Defines input directories and output folder
+# - Loads a BED file and two BigWig files (control & case)
+# - Converts regions into a GRanges object
+# - Extracts signal matrices using normalizeToMatrix()
+# - Orders rows based on signal intensity
+# - Builds two aligned EnrichedHeatmap objects (ctrl and case)
+#  -Exports the final figure in PDF and PNG formats
+# - Requirements:
+#   - EnrichedHeatmap
+#   - ComplexHeatmap
+#   - circlize
+#   - GenomicRanges / IRanges
+#   - rtracklayer
+
+#######################################################################################################
+
+# Packages installation CRAN + BIOCONDUCTOR
+
+# Install BiocManager
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+    install.packages("BiocManager", repos = "https://cloud.r-project.org")
+}
+
+cran_pkgs <- c("circlize", "grid")
+bioc_pkgs <- c("GenomicRanges","IRanges","rtracklayer","EnrichedHeatmap","ComplexHeatmap")
+
+# Utility function: installs only missing packages
+install_missing <- function(pkgs) {
+    missing <- pkgs[!pkgs %in% installed.packages()[, "Package"]]
+    if (length(missing) > 0)
+        install.packages(missing, repos = "https://cloud.r-project.org")
+}
+
+# Install missing CRAN packages
+install_missing(cran_pkgs)
+
+# Install missing Bioconductor packages
+BiocManager::install(bioc_pkgs, ask = FALSE, update = TRUE)
+
+message("All required packages are installed.")
+
+library(GenomicRanges)
+library(IRanges)
+library(rtracklayer)
+library(EnrichedHeatmap)
+library(ComplexHeatmap)
+library(circlize)
+library(grid)
+
+########################################################################################################
+
+# User inputs
+# Base directory containing BED + BigWig files
+base_dir <- "put the file path"
+
+# Cell line or dataset name (used in output filenames)
+line <- "put the cell line name"
+
+# Output directory
+out_dir <- file.path(base_dir, "put the output folder name")
+dir.create(out_dir, showWarnings = FALSE)
+
+# Function: generate heatmaps for one cell line / dataset
+make_heatmap <- function(line, base_dir, out_dir) {
+
+  message("Processing ", line)
+
+  # Define file paths
+  bed_file <- file.path(base_dir, "put the bed file name")
+
+  bw_ctrl <- file.path(base_dir, "put the bw ctrl name")   # Control BigWig
+  bw_case <- file.path(base_dir, "put the bw case name")   # Case / treated BigWig
+
+  # Load BED file and convert to GRanges
+  # BED must contain: chr, start, end (first 3 columns)
+  regions <- read.table(bed_file, sep = "\t", stringsAsFactors = FALSE)[, 1:3]
+  colnames(regions) <- c("chr", "start", "end")
+
+  # Convert to GRanges for genomic operations
+  regions_gr <- GRanges(
+    seqnames = regions$chr,
+    ranges   = IRanges(start = regions$start, end = regions$end)
+  )
+
+  # Extract signal matrices from BigWig files
+  bw_files <- list(ctrl = bw_ctrl, case = bw_case)
+
+  signal_matrices <- lapply(bw_files, function(bw) {
+    bw_data <- import(bw)  # Import BigWig signal
+
+    # Convert signal track into a matrix aligned around regions
+    normalizeToMatrix(
+      bw_data,
+      regions_gr,
+      extend        = 500,       # number of bp upstream/downstream
+      value_column  = "score",
+      mean_mode     = "coverage",
+      w             = 25,        # bin size
+      smooth        = FALSE,
+      background    = 0
+    )
+  })
+
+
+  # Convert to numeric matrices
+  mat1 <- as.matrix(signal_matrices[[1]])  # Control
+  mat2 <- as.matrix(signal_matrices[[2]])  # Case
+
+  # Color scale for heatmaps
+  col <- colorRamp2(
+    c(0, 1, 2),                  # signal values
+    c("navy", "purple", "orange")  # corresponding colors
+  )
+
+
+  # Order rows by signal intensity
+  row_order_1 <- order(rowSums(mat1, na.rm = TRUE), decreasing = TRUE)
+  row_order_2 <- order(rowSums(mat2, na.rm = TRUE), decreasing = TRUE)
+
+  mat_1_ord <- mat1[row_order_1, , drop = FALSE]
+  mat_2_ord <- mat2[row_order_2, , drop = FALSE]
+
+  # Shared legend parameters
+  legend_param <- list(
+    title  = "",
+    at     = c(0, 0.75, 1.5),
+    labels = c("Low", "", "High")
+  )
+
+  # Build heatmap: CONTROL
+  ht <-
+    EnrichedHeatmap(
+      mat_1_ord,
+      name = "ctrl",
+      col  = col,
+      heatmap_legend_param = legend_param,
+      pos_line = FALSE,
+      axis_name = c("-500", "", "", "500"),
+      width  = unit(3.2, "cm"),
+      height = unit(8.1, "cm"),
+      top_annotation = HeatmapAnnotation(
+        enriched = anno_enriched(
+          gp = gpar(col = "black", lwd = 2),
+          ylim = c(0, 1.5),
+          axis_param = list(
+            at     = c(0, 0.5, 1, 1.5),
+            labels = character(0),
+            side   = "right",
+            facing = "outside"
+          )
+        )
+      )
+    ) +
+
+    # Heatmap: CASE
+    EnrichedHeatmap(
+      mat_2_ord,
+      name = "case",
+      col  = col,
+      heatmap_legend_param = list(
+        title = NULL,
+        at     = NULL,
+        labels = NULL
+      ),
+      show_heatmap_legend = FALSE,
+      pos_line = FALSE,
+      axis_name = c("-500", "", "", "500"),
+      width  = unit(3.2, "cm"),
+      height = unit(8.1, "cm"),
+      top_annotation = HeatmapAnnotation(
+        enriched = anno_enriched(
+          gp = gpar(col = "blue", lwd = 2),
+          ylim = c(0, 1.5),
+          axis_param = list(
+            at     = c(0, 0.5, 1, 1.5),
+            labels = c("0", "0.5", "1", "1.5"),
+            side   = "right",
+            facing = "outside"
+          )
+        )
+      )
+    )
+
+  # Export figures (PDF + PNG)
+  pdf(
+    file.path(out_dir, paste0(line, "_heatmap.pdf")),
+    width  = 7,
+    height = 6
+  )
+  draw(ht, heatmap_legend_side = "right")
+  dev.off()
+
+  png(
+    file.path(out_dir, paste0(line, "_heatmap.png")),
+    width  = 11,
+    height = 6,
+    units  = "in",
+    res    = 300,
+    type   = "cairo"
+  )
+  draw(ht, heatmap_legend_side = "right")
+  dev.off()
+}
+
+
+# Run the function on cell line in 'line'
+lapply(
+  line,
+  make_heatmap,
+  base_dir = base_dir,
+  out_dir  = out_dir
+)
+
+##########################################################################################################################
+
+```
+
