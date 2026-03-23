@@ -1,0 +1,164 @@
+---
+title: "Boxplot hPu hPy repeat length"
+output: 
+date: "2026-02-20"
+---
+
+######################################################################################################
+# Gustave Roussy (GR) | CNRS UMR 9019, Genome dynamics and instability Lab - Gabriel MATOS RODRIGUES 
+# Developed by BEKKOUCHE Louisa - bekkouche.louisa@gmail.com                                 
+# Edited by: Genome dynamics and instability Lab                                     
+# v.0.1 - 2025/12/18 (for Human genome) | v.0.2 2026/02/16 (for Mouse genenome)	     
+# R version 4.5.2 (2025-10-31)                                                       
+# MIT licence - Copyright (c) 2025 Gabriel Matos Rodrigues			                     
+# run it in a env conda for R version and enjoy your results! :)                     
+#######################################################################################################
+
+```{r}
+
+#######################################################################################################
+
+# Boxplots of repeat lengths from multiple BED groups
+# - Reads several BED files (whole genome, hPu/hPy, neg/pos)
+# - Computes repeat lengths
+# - Draws custom quantile boxplots (P10–P90 whiskers)
+# Dependencies: dplyr, ggplot2, readr (or base read.table), scales (optional)
+
+#######################################################################################################
+
+# Packages installation CRAN + BIOCONDUCTOR
+
+cran_pkgs <- c("dplyr","ggplot2","scales")
+
+# Utility function: installs only missing packages
+install_missing <- function(pkgs) {
+  missing <- pkgs[!pkgs %in% rownames(installed.packages())]
+  if (length(missing) > 0) {
+    install.packages(missing, repos = "https://cloud.r-project.org")
+  }
+}
+
+# Install missing CRAN packages
+install_missing(cran_pkgs)
+
+message("All required packages are installed.")
+
+library(dplyr)
+library(ggplot2)
+library(scales)
+
+#######################################################################################################
+
+# User inputs (adjust paths)
+bed_whole_path  <- "put the whole genome bed file path"
+
+bed_hPu_neg_path <- "put the hPu neg bed file path"
+bed_hPy_neg_path <- "put the hPy neg bed file path"
+
+bed_hPu_pos_path <- "put the hPu pos bed file path"
+bed_hPy_pos_path <- "put the hPy pos bed file path"
+
+out_plot <- "put the plot output path"
+
+# Input checks
+in_files <- c(bed_whole_path, bed_hPu_neg_path, bed_hPy_neg_path, bed_hPu_pos_path, bed_hPy_pos_path)
+stopifnot("One or more input BED files do not exist." = all(file.exists(in_files)))
+
+# Load BED files (expects: chrom, start, end, motif)
+bed_whole  <- read.table(bed_whole_path,  sep = "\t", header = FALSE, stringsAsFactors = FALSE)
+bed_hPu_neg <- read.table(bed_hPu_neg_path, sep = "\t", header = FALSE, stringsAsFactors = FALSE)
+bed_hPy_neg <- read.table(bed_hPy_neg_path, sep = "\t", header = FALSE, stringsAsFactors = FALSE)
+bed_hPu_pos <- read.table(bed_hPu_pos_path, sep = "\t", header = FALSE, stringsAsFactors = FALSE)
+bed_hPy_pos <- read.table(bed_hPy_pos_path, sep = "\t", header = FALSE, stringsAsFactors = FALSE)
+
+# Standardize columns and compute length
+process_bed <- function(df, sample_name) {
+  # Ensure at least 3 columns: chrom, start, end; 4th (motif) optional
+  stopifnot("Each BED must have >= 3 columns (chrom, start, end)." = ncol(df) >= 3)
+  colnames(df)[1:3] <- c("chrom", "start", "end")
+  if (ncol(df) >= 4) {
+    colnames(df)[4] <- "motif"
+  } else {
+    df$motif <- NA_character_
+  }
+  df$sample    <- sample_name
+  df$length_bp <- df$end - df$start
+  df
+}
+
+# Apply to all datasets
+bed_whole   <- process_bed(bed_whole,   "Whole genome")
+bed_hPu_neg <- process_bed(bed_hPu_neg, "hPu Neg")
+bed_hPy_neg <- process_bed(bed_hPy_neg, "hPy Neg")
+bed_hPu_pos <- process_bed(bed_hPu_pos, "hPu Pos")
+bed_hPy_pos <- process_bed(bed_hPy_pos, "hPy Pos")
+
+# Combine groups
+bed_all <- rbind(
+  bed_whole,
+  bed_hPu_neg, bed_hPy_neg,
+  bed_hPu_pos, bed_hPy_pos
+)
+
+# Order of samples on the x-axis
+bed_all$sample <- factor(
+  bed_all$sample,
+  levels = c("Whole genome", "hPu Neg", "hPy Neg", "hPu Pos", "hPy Pos")
+)
+
+# Line colors for each group (used as box outline colors)
+contour_colors <- c(
+  "Whole genome" = "black",
+  "hPu Neg"      = "firebrick",
+  "hPy Neg"      = "springgreen4",
+  "hPu Pos"      = "firebrick",
+  "hPy Pos"      = "springgreen4"
+)
+
+# Custom summary function for stat_summary (P10–Q1–Median–Q3–P90)
+q_box <- function(y) {
+  data.frame(
+    ymin   = quantile(y, 0.10, na.rm = TRUE),  # lower whisker = P10
+    lower  = quantile(y, 0.25, na.rm = TRUE),  # Q1
+    middle = quantile(y, 0.50, na.rm = TRUE),  # Median
+    upper  = quantile(y, 0.75, na.rm = TRUE),  # Q3
+    ymax   = quantile(y, 0.90, na.rm = TRUE)   # upper whisker = P90
+  )
+}
+
+# Summary stats (used to annotate medians)
+stats_df <- bed_all |>
+  dplyr::group_by(sample) |>
+  dplyr::summarise(
+    median_len = median(length_bp, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Y-axis upper limit (fixed)
+y_top <- 300
+
+# Boxplot: quantile-based boxplots + median text labels
+p_box <- ggplot(bed_all, aes(x = sample, y = lengh, color = sample)) +
+  stat_summary(fun.data = q_box,geom = "boxplot",width = 0.7,size = 0.6,fill = "white") +
+  geom_text(data = stats_df,aes(x = sample,y = median_len,label = paste0("Median = ", round(median_len, 1))),inherit.aes = FALSE,size = 3,color = "black",vjust = -0.6) +
+  scale_color_manual(values = contour_colors) +
+  labs(x = "", y = "Repeat length (bp)") +
+  theme_classic(base_size = 14) +
+  theme(legend.position = "none") +
+  coord_cartesian(ylim = c(0, y_top))
+
+print(p_box)
+
+
+# Save figure
+ggsave(
+  filename = out_plot,
+  plot     = p_box,
+  width    = 7,
+  height   = 6,
+  units    = "in"
+)
+
+#######################################################################################################
+```
+
