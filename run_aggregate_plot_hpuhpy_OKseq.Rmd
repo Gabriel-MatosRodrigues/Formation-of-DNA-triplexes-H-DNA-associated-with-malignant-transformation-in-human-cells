@@ -1,0 +1,177 @@
+---
+title: "Aggregate plot hPu hPy OKseq"
+output: 
+date: "2026-02-20"
+---
+
+######################################################################################################
+# Gustave Roussy (GR) | CNRS UMR 9019, Genome dynamics and instability Lab - Gabriel MATOS RODRIGUES 
+# Developed by BEKKOUCHE Louisa - bekkouche.louisa@gmail.com                                 
+# Edited by: Genome dynamics and instability Lab                                     
+# v.0.1 - 2025/12/18 (for Human genome) | v.0.2 2026/02/16 (for Mouse genenome)	     
+# R version 4.5.2 (2025-10-31)                                                       
+# MIT licence - Copyright (c) 2025 Gabriel Matos Rodrigues			                     
+# run it in a env conda for R version and enjoy your results! :)                     
+#######################################################################################################
+
+```{r}
+
+#######################################################################################################
+
+# Aggregate profiles from BigWig signals over BED regions
+# Produces a line plot comparing conditions (e.g., pos.bw vs neg.bw)
+# Dependencies: IRanges, GenomicRanges, GenomeInfoDb, rtracklayer, EnrichedHeatmap,
+#               ggplot2, dplyr, tidyr
+
+#######################################################################################################
+
+# Packages installation CRAN + BIOCONDUCTOR
+
+
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+    install.packages("BiocManager", repos = "https://cloud.r-project.org")
+}
+
+cran_pkgs <- c("ggplot2","dplyr","tidyr")
+bioc_pkgs <- c("IRanges","GenomicRanges","GenomeInfoDb","rtracklayer","EnrichedHeatmap")
+
+# Utility function: installs only missing packages
+install_missing_cran <- function(pkgs) {
+    missing <- pkgs[!pkgs %in% rownames(installed.packages())]
+    if (length(missing) > 0) {
+        install.packages(missing, repos = "https://cloud.r-project.org")
+    }
+}
+
+# Install missing CRAN packages
+install_missing_cran(cran_pkgs)
+BiocManager::install(bioc_pkgs, ask = FALSE, update = TRUE)
+
+message("All required packages are installed.")
+
+library(IRanges)
+library(GenomicRanges)
+library(GenomeInfoDb)  
+library(rtracklayer)    
+library(EnrichedHeatmap)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+#######################################################################################################
+
+# User inputs (edit these paths) 
+bigwig_dir <- "/bw/path"
+bed_path   <- "/bed/path"
+
+# Validate BigWig files
+bigwig_files <- list.files(bigwig_dir, pattern = "\\.(bw|bigWig)$", full.names = TRUE)
+stopifnot("No BigWig" = length(bigwig_files) > 0)
+
+# Derive labels from file names (without extensions)
+file_basenames <- basename(bigwig_files)
+file_labels    <- tools::file_path_sans_ext(file_basenames)  
+
+# Import BED file and build GRanges
+# Expecting BED with columns: chrom, start, end. Extra columns are ignored.
+bed <- read.table(bed_path, header = FALSE, sep = "\t", stringsAsFactors = FALSE)
+stopifnot(ncol(bed) >= 3)
+regions <- GRanges(seqnames = bed[[1]], ranges = IRanges(start = bed[[2]], end = bed[[3]]))
+
+# Harmonize seqlevels style between regions and BigWig data
+# Import one BigWig to capture its seqlevelsStyle
+bw0 <- import(bigwig_files[1], format = "BigWig")
+seqlevelsStyle(regions) <- seqlevelsStyle(bw0)
+
+# Build signal matrices around regions for each BigWig
+# normalizeToMatrix() from EnrichedHeatmap computes a matrix of signal around regions.
+# Parameters: extend = 1000bp upstream and downstream, bin width w = 25bp.
+signal_matrices <- lapply(bigwig_files, function(bw_file) {
+  # Import signal track
+  bw_data <- import(bw_file, format = "BigWig")
+  # Harmonize chromosome naming style with regions
+  seqlevelsStyle(bw_data) <- seqlevelsStyle(regions)
+  # Create matrix of signal around regions
+  normalizeToMatrix(
+    bw_data,
+    regions,
+    value_column = "score",
+    extend = 1000,        # extension
+    mean_mode = "absolute",
+    w = 25
+  )
+})
+
+# Aggregate profiles: column means across regions for each BigWig
+aggregate_profiles <- lapply(signal_matrices, function(mat) {
+  # colMeans gives the average signal per bin across all target regions
+  colMeans(mat, na.rm = TRUE)
+})
+
+# Prepare a tidy data frame for plotting 
+# Combine aggregated profiles into a single data.frame
+profile_df <- as.data.frame(do.call(cbind, aggregate_profiles))
+colnames(profile_df) <- file_labels  
+
+# Derive a Position axis matching the number of bins (from -1000 to +1000)
+n_bins <- nrow(profile_df)
+profile_df$Position <- seq(-1000, 1000, length.out = n_bins)
+
+# Reshape to long format for ggplot
+plot_data <- profile_df |>
+  pivot_longer(cols = -Position, names_to = "Sample", values_to = "Signal")
+
+# Map Samples to original basenames and create a Condition column based on filename patterns
+label_map <- data.frame(
+  Sample = file_labels,
+  Basename = file_basenames,
+  stringsAsFactors = FALSE
+)
+
+plot_data <- plot_data |>
+  left_join(label_map, by = "Sample") |>
+  mutate(
+    Condition = case_when(
+      grepl("pos\\.bw$", Basename, ignore.case = TRUE) ~ "pos.bw",
+      grepl("neg\\.bw$", Basename, ignore.case = TRUE) ~ "neg.bw",
+      TRUE ~ "other"
+    )
+  )
+
+
+# Define the plot colors per Condition
+custom_colors <- c("pos.bw" = "black", "neg.bw" = "grey")
+
+
+# Aggregate plot
+p <- ggplot(plot_data, aes(x = Position, y = Signal, color = Condition, group = Sample)) +
+  geom_line(linewidth = 1.5, alpha = 0.9, linetype = "solid") +
+  scale_color_manual(values = custom_colors, labels = c("Neg", "Pos")) +
+  theme_classic(base_size = 12) +
+  labs(
+    x = "hPu/hPy repeat center",
+    y = "Normalized S1-END-seq (RPM)",
+    color = "Strand"
+  ) +
+  ylim(-1.2,1.2) +
+  theme(plot.title = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        legend.text  = element_text(size = 8))
+  
+
+print(p)
+
+# Save the plot to disk
+# provide a full filename including extension (e.g. .png or .pdf)
+ggsave(
+  filename = "/output/folder/path",
+  plot = p,
+  width = 3, height = 3, dpi = 100
+)
+
+#######################################################################################################
+```
+
+
