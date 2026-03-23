@@ -1,0 +1,205 @@
+---
+title: "Barplot motif analyses hPu hPy OKseq"
+output: 
+date: "2026-02-20"
+---
+
+######################################################################################################
+# Gustave Roussy (GR) | CNRS UMR 9019, Genome dynamics and instability Lab - Gabriel MATOS RODRIGUES 
+# Developed by BEKKOUCHE Louisa - bekkouche.louisa@gmail.com                                 
+# Edited by: Genome dynamics and instability Lab                                     
+# v.0.1 - 2025/12/18 (for Human genome) | v.0.2 2026/02/16 (for Mouse genenome)	     
+# R version 4.5.2 (2025-10-31)                                                       
+# MIT licence - Copyright (c) 2025 Gabriel Matos Rodrigues			                     
+# run it in a env conda for R version and enjoy your results! :)                     
+#######################################################################################################
+
+```{r}
+
+#######################################################################################################
+
+# Quantification of repeat motif categories across datasets
+# - Loads multiple BED files (Whole genome / hPu / hPy / Pos / Neg)
+# - Cleans motif strings and assigns them to defined motif groups
+# - Computes motif proportions per category (Whole genome / Pos / Neg)
+# - Builds a grouped barplot showing normalized percentages
+
+#######################################################################################################
+
+# Packages installation CRAN + BIOCONDUCTOR
+
+cran_pkgs <- c("dplyr","ggplot2","scales", "tidyr", "stringr")
+
+# Utility function: installs only missing packages
+install_missing <- function(pkgs) {
+  missing <- pkgs[!pkgs %in% rownames(installed.packages())]
+  if (length(missing) > 0) {
+    install.packages(missing, repos = "https://cloud.r-project.org")
+  }
+}
+
+# Install missing CRAN packages
+install_missing(cran_pkgs)
+
+message("All required packages are installed.")
+
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(stringr)
+library(tidyr)
+
+#######################################################################################################
+
+# User inputs (paths to BED files)
+bed_whole_path  <- "put the whole genome bed file path"
+
+bed_hPu_neg_path <- "put the hPu neg bed file path"
+bed_hPy_neg_path <- "put the hPy neg bed file path"
+
+bed_hPu_pos_path <- "put the hPu pos bed file path"
+bed_hPy_pos_path <- "put the hPy pos bed file path"
+
+out_plot <- "put the plot output path"
+
+# Check that all input BED files exist
+in_files <- c(
+  bed_whole_path,
+  bed_hPu_neg_path, bed_hPy_neg_path,
+  bed_hPu_pos_path, bed_hPy_pos_path
+)
+
+stopifnot("One or more input BED files do not exist." = all(file.exists(in_files)))
+
+# Load BED files
+# BED format REQUIRED: chrom, start, end, motif (4 columns)
+read_bed_strict <- function(path) {
+  df <- read.table(path, sep = "\t", header = FALSE, stringsAsFactors = FALSE)
+
+  # Enforce exactly 4 columns
+  stopifnot(
+    paste("BED file", path, "must have 4 columns.") =
+      ncol(df) == 4
+  )
+
+  colnames(df) <- c("chrom", "start", "end", "motif")
+  df
+}
+
+bed_whole   <- read_bed_strict(bed_whole_path)
+bed_hPu_neg <- read_bed_strict(bed_hPu_neg_path)
+bed_hPy_neg <- read_bed_strict(bed_hPy_neg_path)
+bed_hPu_pos <- read_bed_strict(bed_hPu_pos_path)
+bed_hPy_pos <- read_bed_strict(bed_hPy_pos_path)
+
+# Standardize format: assign sample + compute repeat length
+process_bed <- function(df, sample_name) {
+
+  # Compute repeat length in bp
+  df$length_bp <- df$end - df$start
+
+  # Assign sample name
+  df$sample <- sample_name
+
+  df
+}
+
+# Apply to all datasets
+bed_whole   <- process_bed(bed_whole,   "Whole genome")
+bed_hPu_neg <- process_bed(bed_hPu_neg, "hPu Neg")
+bed_hPy_neg <- process_bed(bed_hPy_neg, "hPy Neg")
+bed_hPu_pos <- process_bed(bed_hPu_pos, "hPu Pos")
+bed_hPy_pos <- process_bed(bed_hPy_pos, "hPy Pos")
+
+# Combine datasets
+bed_all <- rbind(
+  bed_whole,
+  bed_hPu_neg, bed_hPy_neg,
+  bed_hPu_pos, bed_hPy_pos
+)
+
+# Clean motif names (remove whitespace)
+bed_all <- bed_all %>%
+  mutate(motif_clean = str_replace_all(motif, " ", ""))
+
+# Define motif categories (hPu and hPy)
+group1 <- c("(GA)n", "(AG)n")
+group2 <- c("(GAA)n", "(AAG)n", "(AGA)n")
+group3 <- c("(GAAA)n","(AAAG)n","(AAGA)n","(AGAA)n")
+group4 <- c("(GGAA)n","(GAAG)n","(AAGG)n","(AGGA)n",
+            "(GAAAA)n","(AAAAG)n","(AAAGA)n","(AAGAA)n","(AGAAA)n")
+
+group5 <- c("(TC)n", "(CT)n")
+group6 <- c("(TCT)n", "(TTC)n", "(CTT)n")
+group7 <- c("(TTTC)n","(CTTT)n","(TCTT)n","(TTCT)n")
+group8 <- c("(TTCC)n","(CCTT)n","(TCCT)n","(CTTC)n",
+            "(CTTTT)n","(TTTTC)n","(TTTCT)n","(TTCTT)n","(TCTTT)n")
+
+
+# Assign motif group + category (Pos / Neg / Whole genome)
+bed_filtered <- bed_all %>%
+  mutate(
+    group = case_when(
+      motif_clean %in% group1 ~ "(GA)n",
+      motif_clean %in% group2 ~ "(GAA)n",
+      motif_clean %in% group3 ~ "(GAAA)n",
+      motif_clean %in% group4 ~ "(GAAAA)n",
+      motif_clean %in% group5 ~ "(TC)n",
+      motif_clean %in% group6 ~ "(TTC)n",
+      motif_clean %in% group7 ~ "(TTTC)n",
+      motif_clean %in% group8 ~ "(TTTTC)n",
+      TRUE ~ "Other"
+    ),
+    category = case_when(
+      sample == "Whole genome" ~ "Whole genome",
+      grepl("Pos$", sample)    ~ "Pos",
+      grepl("Neg$", sample)    ~ "Neg",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(category))
+
+# Count motifs per group & category
+# Complete missing combinations with n = 0
+counts_df <- bed_filtered %>%
+  count(group, category) %>%
+  complete(group, category = c("Whole genome", "Pos", "Neg"), fill = list(n = 0))
+
+# Normalize counts -> percentage per category
+norm_df <- counts_df %>%
+  group_by(category) %>%
+  mutate(normalized_percentage = 100 * n / sum(n)) %>%
+  ungroup()
+
+# Plot grouped barplot
+p <- ggplot(norm_df, aes(x = group, y = normalized_percentage, fill = category)) +
+  geom_col(position = position_dodge(width = 0.8),
+           color = "black", width = 0.8) +
+  labs(
+    x = "",
+    y = "Repeat percentage",
+    fill = ""
+  ) +
+  scale_fill_manual(values = c(
+    "Whole genome" = "black",
+    "Pos" = "springgreen4",
+    "Neg" = "firebrick"
+  )) +
+  theme_classic(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ylim(0, 30)
+
+print(p)
+
+# Save plot
+ggsave(
+  filename = out_plot,
+  plot = p,
+  width = 10,
+  height = 6,
+  units = "in"
+)
+#######################################################################################################
+
+```
+
