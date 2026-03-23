@@ -1,0 +1,162 @@
+---
+title: "Barplot motif analyses hPu hPy S1-ENDseq"
+output: 
+date: "2026-02-20"
+---
+
+######################################################################################################
+# Gustave Roussy (GR) | CNRS UMR 9019, Genome dynamics and instability Lab - Gabriel MATOS RODRIGUES 
+# Developed by BEKKOUCHE Louisa - bekkouche.louisa@gmail.com                                 
+# Edited by: Genome dynamics and instability Lab                                     
+# v.0.1 - 2025/12/18 (for Human genome) | v.0.2 2026/02/16 (for Mouse genenome)	     
+# R version 4.5.2 (2025-10-31)                                                       
+# MIT licence - Copyright (c) 2025 Gabriel Matos Rodrigues			                     
+# run it in a env conda for R version and enjoy your results! :)                     
+#######################################################################################################
+
+```{r}
+
+#######################################################################################################
+
+# Peak count comparison between two BED datasets based on repeat-motif classification
+# - Loads two BED files (Control and Case)
+# - Extracts the motif column (column 14)
+# - Classifies motifs into grouped categories
+# - Counts the number of peaks per motif group and per condition
+# - Generates a barplot comparing conditions
+# - Exports the plot as a PDF
+
+#######################################################################################################
+
+# Packages installation CRAN + BIOCONDUCTOR
+
+cran_pkgs <- c("ggplot2","dplyr","readr","ggthemes")
+
+# Utility function: installs only missing packages
+install_missing <- function(pkgs) {
+    missing <- pkgs[!pkgs %in% installed.packages()[, "Package"]]
+    if (length(missing) > 0) {
+        install.packages(missing, repos = "https://cloud.r-project.org")
+    }
+}
+
+# Install missing CRAN packages
+install_missing(cran_pkgs)
+
+message("All required packages are installed.")
+
+library(ggplot2)
+library(dplyr)
+library(readr)
+library(ggthemes)
+
+#######################################################################################################
+
+# User input paths
+# BED files containing at least 14 columns (column 14 = motif)
+bed1 <- "put the ctrl bed file path"   # Control dataset
+bed2 <- "put the case bed file path"   # Case dataset
+
+# Condition labels
+cond1 <- "DMSO"   # control condition
+cond2 <- "BQQ"    # treated condition
+
+# Load BED files
+# No header; tab-separated; motif must be column 14
+df1 <- read.table(bed1, sep = "\t", stringsAsFactors = FALSE)
+df2 <- read.table(bed2, sep = "\t", stringsAsFactors = FALSE)
+
+# Assigning column 14 as the motif column
+colnames(df1)[14] <- "motif"
+colnames(df2)[14] <- "motif"
+
+# Define motif grouping scheme
+group1 <- c("(GA)n", "(AG)n", "(TC)n", "(CT)n")
+group2 <- c("(GAA)n", "(AAG)n", "(AGA)n", "(TCT)n", "(TTC)n", "(CTT)n")
+group3 <- c("(GAAA)n","(AAAG)n","(AAGA)n","(AGAA)n",
+            "(TTTC)n","(CTTT)n","(TCTT)n","(TTCT)n")
+group4 <- c("(GGAA)n","(GAAG)n","(AAGG)n","(AGGA)n",
+            "(TTCC)n","(CCTT)n","(TCCT)n","(CTTC)n",
+            "(GAAAA)n","(AAAAG)n","(AAAGA)n","(AAGAA)n","(AGAAA)n",
+            "(CTTTT)n","(TTTTC)n","(TTTCT)n","(TTCTT)n","(TCTTT)n")
+
+# Function to classify motifs
+# Adds a new column "category" based on motif identity
+classify <- function(df) {
+  df %>%
+    mutate(category =
+             case_when(
+               motif %in% group1 ~ "(GA)n/(TC)n",
+               motif %in% group2 ~ "(GAA)n/(TTC)n",
+               motif %in% group3 ~ "(GAAA)n/(TTTC)n",
+               motif %in% group4 ~ "(GGAA)n/(TTCC)n",
+               TRUE ~ "Other"   # Any motif not included in the defined groups
+             ))
+}
+
+# Apply motif classification to both conditions
+df1 <- classify(df1)
+df2 <- classify(df2)
+
+# Count peaks per motif category
+count1 <- df1 %>% count(category) %>% mutate(condition = cond1)
+count2 <- df2 %>% count(category) %>% mutate(condition = cond2)
+
+# Combine both datasets for plotting
+df_all <- bind_rows(count1, count2)
+
+# Ordering categories for the plot
+df_all$category <- factor(
+  df_all$category,
+  levels = c(
+    "Other",
+    "(GGAA)n/(TTCC)n",
+    "(GAAA)n/(TTTC)n",
+    "(GAA)n/(TTC)n",
+    "(GA)n/(TC)n"
+  )
+)
+
+# Barplot comparing motif counts
+p <- ggplot(df_all, aes(x = n, y = category, fill = condition)) +
+  geom_bar(
+    stat = "identity",
+    position = position_dodge(width = 0.75),
+    width = 0.6,
+    color = "black"
+  ) +
+  theme_classic() +
+  labs(
+    x = "Number of Peaks",
+    y = "",
+    fill = NULL
+  ) +
+  # Define colors for each condition
+  scale_fill_manual(
+    values = c("DMSO" = "black", "BQQ" = "red"),
+    breaks = c("DMSO", "BQQ")
+  ) +
+  theme(
+    text = element_text(size = 13),
+    legend.title = element_text(size = 8),
+    legend.text  = element_text(size = 8),
+    axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.x  = element_text(size = 8),
+    axis.text.y  = element_text(size = 8)
+  )
+
+print(p)
+
+# Export plot as PDF
+ggsave(
+  "put the output folder path",
+  p,
+  width = 5,
+  height = 4
+)
+
+#######################################################################################################
+
+```
+
