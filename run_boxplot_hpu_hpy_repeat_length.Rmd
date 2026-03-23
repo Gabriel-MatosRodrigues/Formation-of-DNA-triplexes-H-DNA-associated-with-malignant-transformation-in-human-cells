@@ -5,7 +5,7 @@ date: "2026-02-20"
 ---
 
 ######################################################################################################
-# Gustave Roussy (GR) | CNRS UMR 9019, Genome dynamics and instability Lab - Gabriel MATOS RODRIGUES 
+# Gustave Roussy (GR) | CNRS UMR 9019, Genome dynamics and maintenance Lab - Gabriel MATOS RODRIGUES 
 # Developed by BEKKOUCHE Louisa - bekkouche.louisa@gmail.com                                 
 # Edited by: Genome dynamics and instability Lab                                     
 # v.0.1 - 2025/12/18 (for Human genome) | v.0.2 2026/02/16 (for Mouse genenome)	     
