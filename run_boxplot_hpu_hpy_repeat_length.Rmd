@@ -1,16 +1,14 @@
 ---
 title: "Boxplot hPu hPy repeat length"
-output: 
-date: "2026-02-20"
 ---
 
 ######################################################################################################
 # Gustave Roussy (GR) | CNRS UMR 9019, Genome dynamics and maintenance Lab - Gabriel MATOS RODRIGUES 
 # Developed by BEKKOUCHE Louisa - bekkouche.louisa@gmail.com                                 
-# Edited by: Genome dynamics and instability Lab                                     
+# Edited by: Genome dynamics and maintenance Lab                                     
 # v.0.1 - 2025/12/18 (for Human genome) | v.0.2 2026/02/16 (for Mouse genenome)	     
-# R version 4.5.2 (2025-10-31)                                                       
-# MIT licence - Copyright (c) 2025 Gabriel Matos Rodrigues			                     
+# R version 4.6.1 (2026-06)                                                       
+# MIT licence - Copyright (c) 2026 Gabriel Matos Rodrigues			                     
 # run it in a env conda for R version and enjoy your results! :)                     
 #######################################################################################################
 
@@ -50,15 +48,15 @@ library(scales)
 #######################################################################################################
 
 # User inputs (adjust paths)
-bed_whole_path  <- "put the whole genome bed file path"
+bed_whole_path  <- "/genome/bed/file/path"
 
-bed_hPu_neg_path <- "put the hPu neg bed file path"
-bed_hPy_neg_path <- "put the hPy neg bed file path"
+bed_hPu_neg_path <- "/hPu/OKseq/neg/bed/file/path"
+bed_hPy_neg_path <- "/hPy/OKseq/neg/bed/file/path"
 
-bed_hPu_pos_path <- "put the hPu pos bed file path"
-bed_hPy_pos_path <- "put the hPy pos bed file path"
+bed_hPu_pos_path <- "/hPu/OKseq/pos/bed/file/path"
+bed_hPy_pos_path <- "/hPy/OKseq/pos/bed/file/path"
 
-out_plot <- "put the plot output path"
+out_plot <- "/plot/output/path"
 
 # Input checks
 in_files <- c(bed_whole_path, bed_hPu_neg_path, bed_hPy_neg_path, bed_hPu_pos_path, bed_hPy_pos_path)
@@ -87,7 +85,7 @@ process_bed <- function(df, sample_name) {
 }
 
 # Apply to all datasets
-bed_whole   <- process_bed(bed_whole,   "Whole genome")
+bed_whole   <- process_bed(bed_whole,   "Genome-wide")
 bed_hPu_neg <- process_bed(bed_hPu_neg, "hPu Neg")
 bed_hPy_neg <- process_bed(bed_hPy_neg, "hPy Neg")
 bed_hPu_pos <- process_bed(bed_hPu_pos, "hPu Pos")
@@ -103,16 +101,16 @@ bed_all <- rbind(
 # Order of samples on the x-axis
 bed_all$sample <- factor(
   bed_all$sample,
-  levels = c("Whole genome", "hPu Neg", "hPy Neg", "hPu Pos", "hPy Pos")
+  levels = c("Genome-wide", "hPy Pos", "hPu Pos", "hPy Neg", "hPu Neg")
 )
 
 # Line colors for each group (used as box outline colors)
 contour_colors <- c(
-  "Whole genome" = "black",
-  "hPu Neg"      = "firebrick",
-  "hPy Neg"      = "springgreen4",
-  "hPu Pos"      = "firebrick",
-  "hPy Pos"      = "springgreen4"
+  "Genome-wide" = "black",
+  "hPu Neg"      = "springgreen4",
+  "hPy Neg"      = "firebrick",
+  "hPu Pos"      = "springgreen4",
+  "hPy Pos"      = "firebrick"
 )
 
 # Custom summary function for stat_summary (P10–Q1–Median–Q3–P90)
@@ -127,25 +125,142 @@ q_box <- function(y) {
 }
 
 # Summary stats (used to annotate medians)
-stats_df <- bed_all |>
-  dplyr::group_by(sample) |>
-  dplyr::summarise(
-    median_len = median(length_bp, na.rm = TRUE),
+stats_df <- bed_all %>%
+  group_by(sample) %>%
+  summarise(
+    median_len = median(
+      length_bp,
+      na.rm = TRUE
+    ),
     .groups = "drop"
   )
 
+# Wilcoxon tests
+bed_stats <- as.data.frame(bed_all)
+stat.test <- data.frame(
+  group1 = c(
+    "hPy Pos",
+    "hPy Pos",
+    "hPu Pos",
+    "hPy Neg"
+  ),
+  group2 = c(
+    "hPu Pos",
+    "hPy Neg",
+    "hPu Neg",
+    "hPu Neg"
+  ),
+
+  p = c(
+    # hPy Pos vs hPu Pos
+    wilcox.test(
+      length_bp ~ sample,
+      data = bed_stats[
+        bed_stats$sample %in% c("hPy Pos","hPu Pos"),
+      ]
+    )$p.value,
+
+    # hPy Pos vs hPy Neg
+    wilcox.test(
+      length_bp ~ sample,
+      data = bed_stats[
+        bed_stats$sample %in% c("hPy Pos","hPy Neg"),
+      ]
+    )$p.value,
+
+    # hPu Pos vs hPu Neg
+    wilcox.test(
+      length_bp ~ sample,
+      data = bed_stats[
+        bed_stats$sample %in% c("hPu Pos","hPu Neg"),
+      ]
+    )$p.value,
+
+    # hPy Neg vs hPu Neg
+    wilcox.test(
+      length_bp ~ sample,
+      data = bed_stats[
+        bed_stats$sample %in% c("hPy Neg","hPu Neg"),
+      ]
+    )$p.value
+  )
+)
+
+# BH adjustment
+stat.test$p.adj <- p.adjust(
+  stat.test$p,
+  method = "BH"
+)
+
+# p-values format
+stat.test$p.plot <- pmax(
+  stat.test$p.adj,
+  .Machine$double.xmin
+)
+
+stat.test$p.format <- sprintf(
+  "%.3e",
+  stat.test$p.plot
+)
+
+# p-value postions
+stat.test$y.position <- c(
+ 300,  # hPy Pos vs hPu Pos
+    340,  # hPy Pos vs hPy Neg
+    380,  # hPu Pos vs hPu Neg
+    420   # hPy Neg vs hPu Neg
+)
+
 # Y-axis upper limit (fixed)
-y_top <- 300
+y_top <- 450
 
 # Boxplot: quantile-based boxplots + median text labels
-p_box <- ggplot(bed_all, aes(x = sample, y = lengh, color = sample)) +
-  stat_summary(fun.data = q_box,geom = "boxplot",width = 0.7,size = 0.6,fill = "white") +
-  geom_text(data = stats_df,aes(x = sample,y = median_len,label = paste0("Median = ", round(median_len, 1))),inherit.aes = FALSE,size = 3,color = "black",vjust = -0.6) +
-  scale_color_manual(values = contour_colors) +
-  labs(x = "", y = "Repeat length (bp)") +
+p_box <- ggplot(
+  bed_all,
+  aes(
+    x = sample,
+    y = length_bp,
+    color = sample)) +
+  stat_summary(
+    fun.data = q_box,
+    geom = "boxplot",
+    width = 0.7,
+    size = 0.6,
+    fill = "white") +
+  geom_text(
+    data = stats_df,
+    aes(
+      x = sample,
+      y = median_len,
+      label = paste0(
+        round(median_len, 1))),
+    inherit.aes = FALSE,
+    size = 3,
+    color = "black",
+    vjust = -0.6) +
+  stat_pvalue_manual(
+    stat.test,
+    label = "p.format",
+    xmin = "group1",
+    xmax = "group2",
+    y.position = "y.position",
+    tip.length = 0,
+    bracket.size = 0.3,
+    size = 3) +
+  scale_color_manual(
+    values = contour_colors) +
+  labs(
+    x = "",
+    y = "Repeat length (bp)") +
   theme_classic(base_size = 14) +
-  theme(legend.position = "none") +
-  coord_cartesian(ylim = c(0, y_top))
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1)) +
+  coord_cartesian(
+    ylim = c(0, y_top))
+
 
 print(p_box)
 
@@ -154,11 +269,10 @@ print(p_box)
 ggsave(
   filename = out_plot,
   plot     = p_box,
-  width    = 7,
-  height   = 6,
+  width    = 6,
+  height   = 4,
   units    = "in"
 )
 
 #######################################################################################################
 ```
-
