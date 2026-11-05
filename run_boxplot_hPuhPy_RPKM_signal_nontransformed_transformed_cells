@@ -26,7 +26,7 @@ title: "Boxplot of hPu/hPy RPKM signal across Non-transformed and transformed ce
 # - Performs Wilcoxon statistical testing with BH correction
 # - Generates individual and combined boxplot visualizations
 # - Annotates plots with median values and adjusted p-values
-# - Saves all figures in publication-ready format
+# - Saves all figures
 #
 # Requirements:
 #   - GenomicRanges
