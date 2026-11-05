@@ -1,0 +1,756 @@
+---
+title: "Scatterplot of replication asymmetry pos/neg OKseq plot (transcription)"
+---
+
+######################################################################################################
+# Gustave Roussy (GR) | CNRS UMR 9019, Genome dynamics and maintenance Lab - Gabriel MATOS RODRIGUES 
+# Developed by BEKKOUCHE Louisa - bekkouche.louisa@gmail.com                                 
+# Edited by: Genome dynamics and maintenance Lab                                     
+# v.0.1 - 2025/12/18 (for Human genome) | v.0.2 2026/02/16 (for Mouse genenome)	     
+# R version 4.6.1 (2026-06)                                                       
+# MIT licence - Copyright (c) 2026 Gabriel Matos Rodrigues			                     
+# run it in a env conda for R version and enjoy your results! :)                     
+#######################################################################################################
+
+
+```{r}
+
+#############################################################################################################
+
+# Replication asymmetry analysis of hPu-hPy motifs using OK-seq data
+# - Identifies the 100 most abundant hPu-hPy motifs from Simple Repeat annotations
+# - Filters motifs to retain non-homopolymeric and non-symmetric repeat families
+# - Selects repeat motifs with unit lengths ≤ 8 nucleotides
+# - Annotates repeat loci as transcribed (Genic) or non-transcribed (Intergenic) using GENCODE transcript coordinates
+# - Imports OK-seq replication fork directionality (RFD) datasets from multiple cell lines
+# - Assigns repeat loci to positive or negative replication fork orientation domains
+# - Calculates motif-specific replication asymmetry as the POS/NEG ratio
+# - Computes asymmetry scores using |log2(POS/NEG)|
+# - Aggregates motifs into biologically related repeat-family groups
+# - Compares replication asymmetry between hPu/hPy-forming repeat families and other repeats
+# - Evaluates asymmetry separately in genic and intergenic regions
+# - Generates asymmetry scatterplots with repeat-family annotation labels
+# - Performs non-parametric statistical analyses:
+#     - Kruskal-Wallis tests across repeat families
+#     - Pairwise Wilcoxon tests with Benjamini-Hochberg correction
+#     - hPu-hPy versus Other repeat-family comparisons
+#     - Genic versus intergenic comparisons
+#     - Family-specific genic/intergenic comparisons
+# - Creates formatted summary tables of all statistical results
+# - Exports graphical outputs and statistical results as figures and Excel files
+#
+# Requirements:
+#   - dplyr
+#   - ggplot2
+#   - tidyr
+#   - ggrepel
+#   - forcats
+#   - rstatix
+#   - data.table
+#   - openxlsx
+#   - GenomicRanges
+#   - IRanges
+#   - rtracklayer
+
+#############################################################################################################
+
+# Packages installation CRAN + BIOCONDUCTOR
+cran_pkgs <- c(
+  "dplyr",
+  "ggplot2",
+  "tidyr",
+  "ggrepel",
+  "forcats",
+  "rstatix",
+  "data.table",
+  "openxlsx"
+)
+
+bioc_pkgs <- c(
+  "GenomicRanges",
+  "rtracklayer"
+)
+
+# Utility function: install only missing CRAN packages
+install_missing_cran <- function(pkgs) {
+  missing <- pkgs[!pkgs %in% installed.packages()[, "Package"]]
+  if (length(missing) > 0) {
+    install.packages(
+      missing,
+      repos = "https://cloud.r-project.org"
+    )
+  }
+}
+
+# Utility function: install only missing Bioconductor packages
+install_missing_bioc <- function(pkgs) {
+  if (!requireNamespace("BiocManager", quietly = TRUE)) {
+    install.packages(
+      "BiocManager",
+      repos = "https://cloud.r-project.org"
+    )
+  }
+
+  missing <- pkgs[!pkgs %in% installed.packages()[, "Package"]]
+  if (length(missing) > 0) {
+    BiocManager::install(
+      missing,
+      ask = FALSE,
+      update = FALSE
+    )
+  }
+}
+
+# Install missing packages
+install_missing_cran(cran_pkgs)
+install_missing_bioc(bioc_pkgs)
+
+message("All required packages are installed.")
+
+# Load libraries
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(ggrepel)
+library(forcats)
+library(rstatix)
+library(data.table)
+library(openxlsx)
+library(GenomicRanges)
+library(rtracklayer)
+
+#############################################################################################################
+
+# Create the top100 8nt motif file
+# Read input file
+df <- read.table("/simpleRepeathg19/bed/file/path",sep = "\t",header = FALSE,stringsAsFactors = FALSE)
+
+retirer_motifs_sym <- function(df, col = "V17") {
+  motifs_sym <- c("AT", "TA", "CG", "GC")
+  df[!(df[[col]] %in% motifs_sym), ]
+}
+
+df <- df[!grepl("^[AT]+$", df$V17) &
+         !grepl("^[CG]+$", df$V17), ]
+
+df <- retirer_motifs_sym(df)
+
+top100_df <- df %>%
+  count(V17, sort = TRUE) %>%
+  slice_head(n = 100)
+
+# Top 100 motifs
+top100_motifs <- df %>%
+  count(V17, sort = TRUE) %>%
+  slice_head(n = 100) %>%
+  pull(V17)
+
+# Keep all the motif lines corresponding to Top100
+top100_df <- df %>%
+  filter(V17 %in% top100_motifs) %>%
+  select(V2, V3, V4, V17)
+
+# Top 100 motifs the most frequent
+top100_df <- df %>%
+  count(V17, sort = TRUE) %>%
+  slice_head(n = 100)
+
+# Keep only the motifs with a length < or = to 8
+top100_8nt <- top100_df %>%
+  filter(nchar(V17) <= 8)
+
+motifs_8nt <- top100_8nt$V17
+
+coord_8nt <- df %>%
+  filter(V17 %in% motifs_8nt) %>%
+  select(V2, V3, V4, V17)
+
+# Save the file
+write.table(coord_8nt, "/ouput/file/path",sep = "\t",quote = FALSE,row.names = FALSE)
+
+#############################################################################################################
+
+# Import coord_8nt bed file
+coord_8nt <- fread("/coord_8nt/bed/file/path",sep = "\t",header = FALSE)
+
+# Transcript annotation : gencode.v19.annotation.gtf file
+gtf <- import("/gencode.v19.annotation.gtf/file/path")
+
+gtf_tx <- gtf[gtf$type == "transcript"]
+
+gr_rep <- GRanges(
+  seqnames = coord_8nt$V1,
+  ranges = IRanges(
+    start = coord_8nt$V2 + 1,
+    end = coord_8nt$V3
+  )
+)
+
+hits_tx <- findOverlaps(gr_rep, gtf_tx)
+
+coord_8nt$Transcript <- "Non_transcribed"
+coord_8nt$Transcript[
+  unique(queryHits(hits_tx))
+] <- "Transcribed"
+
+coord_8nt$Family <- coord_8nt$V4
+
+# RFD OKseq files
+rfd_files <- c(
+  cellline1 = "/rfd/file/path/cellline1",
+  cellline2 = "/rfd/file/path/cellline2",
+  cellline3 = "/rfd/file/path/cellline3",
+  cellline4 = "/rfd/file/path/cellline4"
+)
+
+# Ratio computation
+compute_family <- function(rfd_files, cellline){
+  cat("Processing:", cellline, "\n")
+  rfd_regions <- import(rfd_files)
+  hits <- findOverlaps(gr_rep, rfd_regions)
+  mean_rfd <- rep(NA_real_, length(gr_rep))
+  u <- unique(queryHits(hits))
+  mean_rfd[u] <-
+  as.numeric(
+    mcols(rfd_regions)$name[
+      subjectHits(hits)[match(u, queryHits(hits))]
+    ]
+  )
+
+  tmp <- coord_8nt
+  tmp$RFD <- mean_rfd
+  tmp <- tmp %>%
+    mutate(
+      Orientation = case_when(
+        RFD > 0 ~ "POS",
+        RFD < 0 ~ "NEG",
+        TRUE ~ NA_character_
+      )
+    ) %>%
+    filter(!is.na(Orientation))
+  tmp %>%
+    group_by(
+      Family,
+      Transcript,
+      Orientation
+    ) %>%
+    summarise(
+      Count = n(),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      CellLine = cellline
+    )
+}
+
+# All cell lines
+all_family <- bind_rows(
+  lapply(
+    names(rfd_files),
+    function(cl)
+      compute_family(
+        rfd_files[cl],
+        cl
+      )
+  )
+)
+
+# Universe of cell line object
+universe_family <- all_family %>%
+  group_by(
+    Family,
+    Transcript,
+    Orientation
+  ) %>%
+  summarise(
+    Count = sum(Count),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    CellLine = "Universe"
+  )
+
+all_family <- bind_rows(
+  all_family,
+  universe_family
+)
+
+family_groups <- list(
+  "AG GA CT TC" = c("AG","GA","CT","TC"),
+  "AAG AGA GAA / CTT TCT TTC" = c("AAG","AGA","GAA", "CTT","TCT","TTC"),
+  "AAAG AAGA AGAA GAAA / CTTT TCTT TTCT TTTC" = c("AAAG","AAGA","AGAA","GAAA", "CTTT","TCTT","TTCT","TTTC","TTTCT","TTTCTT"),
+  "AAGG AGGA GAAG GGAA / CCTT CTTC TCCT TTCC" = c("AAGG","AGGA","GAAG","GGAA", "CCTT","CTTC","TCCT","TTCC"),
+  "AGGG GAGG GGAG / CCTC CTCC TTCC" = c("AGGG","GAGG","GGAG", "CCTC","CTCC","TTCC"),
+  "AAAAG/TTTTC" = c("AAAAG", "TTTTC", "CTTTT"),
+  "AAAAAG/TTTTTC" = c("AAAAAG", "TTTTTC","TTTTCT"),
+  "AAAAAAG" = c("AAAAAAG"),
+  "AAAAAAAG" = c("AAAAAAAG"),
+  "GATA/TAGA" = c("GATA","TAGA","TATC","CTAT", "ATAG","GATG","CATC","TATG", "ATAC","TCTA", "AGAT","ATCT"),
+  "TCCA/TCCC/ATCC/CCAT" = c("TCCA","TCCC","ATCC","CCAT","TGAA","TGGA"),
+  "AC/TG" = c("AC","CA", "TG", "GT"),
+  "AAC/TTG" = c("AAC","TTG","TGT"),
+  "AAAC/TTTG" = c("CAAA","TTGT","TTTG","GTTT","TGTT"),
+  "AAAAC/TTTTG" = c("AAACA","CAAAA","AAAAC", "TTGTT","TTTGT","GTTTT","TTTTG","TGTTT"),
+  "AAAAAC/TTTTTG" = c("AAAACA","CAAAAA", "TTTTGT","TTTTTG"),
+  "AAAAAAC/TTTTTTG" = c("AAAACAA", "AAAAACA", "TTTTTTG"),
+  "ATGG" = "ATGG",
+   "GAGAGG" =  "GAGAGG"
+)
+
+hpu_hpy_families <- c(
+  "AAG AGA GAA / CTT TCT TTC",
+  "AAAG AAGA AGAA GAAA / CTTT TCTT TTCT TTTC",
+  "AAGG AGGA GAAG GGAA / CCTT CTTC TCCT TTCC",
+  "AGGG GAGG GGAG / CCTC CTCC TTCC")
+
+universe_family <- universe_family %>%
+  mutate(
+    Classe = ifelse(
+      Family %in% hpu_hpy_families,
+      "hpu_hpy",
+      "Other"
+    )
+  )
+
+
+sort(
+  setdiff(
+    unique(coord_8nt$Family),
+    unlist(family_groups)
+  )
+)
+
+family_labels <- c(
+  "AG GA CT TC" = "(GA/TC)n",
+  "AAG AGA GAA / CTT TCT TTC" = "(GAA/TTC)n",
+  "AAAG AAGA AGAA GAAA / CTTT TCTT TTCT TTTC" = "(GAAA/TTTC)n",
+  "AAGG AGGA GAAG GGAA / CCTT CTTC TCCT TTCC" = "(GGAA/TTCC)n",
+  "AGGG GAGG GGAG / CCTC CTCC TTCC" = "(GGGA/TCCC)n",
+  "AAAAG/TTTTC" = "(GAAAA/TTTTC)n",
+  "AAAAAG/TTTTTC" = "(GAAAAA/TTTTTC)n",
+  "AAAAAAG" = "(GAAAAAA/TTTTTTC)n",
+  "AAAAAAAG" = "(GAAAAAAA/TTTTTTTC)n",
+  "GATA/TAGA" = "(GATA/TATC)n",
+  "TCCA/TCCC/ATCC/CCAT" = "(TCCA/TGGA)n",
+  "AC/TG" = "(CA/TG)n",
+  "AAC/TTG" = "(CAA/TTG)n",
+  "AAAC/TTTG" = "(CAAA/TTTG)n",
+  "AAAAC/TTTTG" = "(CAAAA/TTTTG)n",
+  "AAAAAC/TTTTTG" = "(CAAAAA/TTTTTG)n",
+  "AAAAAAC/TTTTTTG" = "(CAAAAAA/TTTTTTC)n",
+  "ATGG" = "(ATGG/TACC)n",
+   "GAGAGG" =  "(GAGAGG/CCTCTC)n"
+)
+
+get_family_group <- function(fam) {
+  for(g in names(family_groups)) {
+    if(fam %in% family_groups[[g]]) {
+      return(g)
+    }
+  }
+  return(NA_character_)
+}
+
+universe_family <- universe_family %>%
+  mutate(
+    FamilyGroup = sapply(Family, get_family_group)
+  ) %>%
+  filter(!is.na(FamilyGroup))
+
+
+universe_ratio <- universe_family %>%
+  dplyr::select(
+    Family,
+    FamilyGroup,
+    Transcript,
+    Orientation,
+    Count,
+    Classe
+  ) %>%
+  tidyr::pivot_wider(
+    names_from = Orientation,
+    values_from = Count,
+    values_fill = 0
+  ) %>%
+  mutate(
+    Ratio = (POS + 1)/(NEG + 1),
+    Module = abs(log2(Ratio))
+  )
+
+universe_ratio_all <- universe_ratio %>%
+  group_by(
+    FamilyGroup,
+    Transcript
+  ) %>%
+  summarise(
+    MeanModule = mean(Module, na.rm = TRUE),
+    SumModule  = sum(Module, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Classe = ifelse(
+      FamilyGroup %in% hpu_hpy_families,
+      "hpu_hpy",
+      "Other"
+    )
+  ) 
+
+family_mean <- universe_ratio %>%
+  group_by(FamilyGroup, Transcript) %>%
+  summarise(
+    SumModule = sum(Module, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(Transcript) %>%
+  summarise(
+    MeanSumModule = mean(SumModule, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+family_score <- universe_ratio %>%
+  group_by(
+    FamilyGroup,
+    Transcript,
+    Family
+  ) %>%
+  summarise(
+    SumModule = sum(Module, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(
+    FamilyGroup,
+    Transcript
+  ) %>%
+  summarise(
+    Score = mean(SumModule, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Classe = ifelse(
+      FamilyGroup %in% hpu_hpy_families,
+      "hpu_hpy",
+      "Other"
+    )
+  )
+
+
+family_score <- family_score %>%
+  mutate(
+    Label = family_labels[FamilyGroup]
+  )
+
+t <- ggplot(family_score,aes(x = "", y = Score,colour = Classe)) +
+  geom_jitter(aes(size = Classe),width = 0.15,height = 0) +
+  geom_text_repel(aes(label = Label),colour = "black", size = 2,max.overlaps = Inf,box.padding = 0.3,point.padding = 0.2,show.legend = FALSE) +
+  facet_wrap(~Transcript) +
+  scale_colour_manual(values = c(hpu_hpy = "red",Other = "grey40")) +
+  scale_size_manual(values = c(hpu_hpy = 4,Other = 2.5)) +
+  theme_classic(base_size = 14) +
+  labs(y = "Mean(log2(Ratio))",x = "") +
+  theme(axis.text.x = element_blank(),axis.ticks.x = element_blank(),axis.title.x = element_blank(),legend.position = "none")
+
+print(t)
+
+ggsave("/asymetry/plot/output/path", plot = t,width = 10,height = 6)
+
+#############################################################################################################
+
+# Statistics
+# Score calculation by motif and transcription
+motif_stats <- universe_ratio %>%
+  mutate(
+    Transcript = recode(
+      Transcript,
+      "Transcribed" = "Genic",
+      "Non_transcribed" = "Intergenic"
+    ),
+    Score = Module,
+    Classe = ifelse(
+      FamilyGroup %in% hpu_hpy_families,
+      "hpu_hpy",
+      "Other"
+    )
+  )
+
+# Kruskal-Wallis test 
+kruskal_results <- motif_stats %>%
+  group_by(Transcript) %>%
+  group_modify(~ {
+
+    test <- kruskal.test(
+      Score ~ FamilyGroup,
+      data = .x
+    )
+
+    data.frame(
+      Statistic = unname(test$statistic),
+      Degrees_freedom = unname(test$parameter),
+      P_value = test$p.value
+    )
+  }) %>%
+  ungroup()
+
+# Pairwise comparison between families
+pairwise_results <- motif_stats %>%
+  group_by(Transcript) %>%
+  pairwise_wilcox_test(
+    Score ~ FamilyGroup,
+    p.adjust.method = "BH"
+  ) %>%
+  ungroup() %>%
+  mutate(
+    Family_1 = unname(family_labels[group1]),
+    Family_2 = unname(family_labels[group2])
+  )
+
+# Wilcoxon test hpu_hpy vs Others
+wilcox_results <- motif_stats %>%
+  group_by(Transcript) %>%
+  group_modify(~ {
+    test <- wilcox.test(
+      Score ~ Classe,
+      data = .x,
+      exact = FALSE
+    )
+    data.frame(
+      Statistic = unname(test$statistic),
+      P_value = test$p.value
+    )
+  }) %>%
+  ungroup()
+
+# Comparaison genic vs Intergenic
+transcription_stats <- motif_stats %>%
+  dplyr::select(
+    FamilyGroup,
+    Family,
+    Transcript,
+    Score
+  ) %>%
+  pivot_wider(
+    names_from = Transcript,
+    values_from = Score
+  ) %>%
+  filter(
+    !is.na(Genic),
+    !is.na(Intergenic)
+  )
+
+global_transcription_test <- wilcox.test(
+  transcription_stats$Genic,
+  transcription_stats$Intergenic,
+  paired = TRUE,
+  exact = FALSE
+)
+
+table_global_transcription <- data.frame(
+  Comparison = "Genic vs Intergenic",
+  N_motifs = nrow(transcription_stats),
+  Statistic = unname(global_transcription_test$statistic),
+  P_value = global_transcription_test$p.value
+) %>%
+  mutate(
+    Significance = case_when(
+      P_value < 0.001 ~ "***",
+      P_value < 0.01 ~ "**",
+      P_value < 0.05 ~ "*",
+      TRUE ~ "ns"
+    )
+  )
+
+# Wilcoxon test comparing family groups (Genic vs Intergenic)
+family_transcription_tests <- transcription_stats %>%
+  group_by(FamilyGroup) %>%
+  group_modify(~ {
+    test <- wilcox.test(
+      .x$Genic,
+      .x$Intergenic,
+      paired = TRUE,
+      exact = FALSE
+    )
+
+    data.frame(
+      N_motifs = nrow(.x),
+      Statistic = unname(test$statistic),
+      P_value = test$p.value
+    )
+  }) %>%
+  ungroup() %>%
+  mutate(
+    P_adjusted_BH = p.adjust(P_value, method = "BH"),
+    Family_Label = unname(family_labels[FamilyGroup]),
+    Significance = case_when(
+      P_adjusted_BH < 0.001 ~ "***",
+      P_adjusted_BH < 0.01 ~ "**",
+      P_adjusted_BH < 0.05 ~ "*",
+      TRUE ~ "ns"
+    )
+  )
+
+table_family_transcription <- family_transcription_tests %>%
+  transmute(
+    Family_Label,
+    N_motifs,
+    Statistic,
+    P_value,
+    P_adjusted_BH,
+    Significance
+  )
+
+# Statistic table creation
+# Table of Kruskal-Wallis test
+table_kruskal <- kruskal_results %>%
+  mutate(
+    Comparison = "All families",
+    P_value_format = ifelse(
+      P_value < 0.001, "< 0.001",
+      sprintf("%.4f", P_value)
+    ),
+    Significance = case_when(
+      P_value < 0.001 ~ "***",
+      P_value < 0.01 ~ "**",
+      P_value < 0.05 ~ "*",
+      TRUE ~ "ns"
+    )
+  ) %>%
+  dplyr::select(
+    Transcript,
+    Comparison,
+    P_value,
+    Significance
+  )
+
+# Table of pairwise comparison between families (Wilcoxon test)
+table_pairwise <- pairwise_results %>%
+  mutate(
+    Family_1 = unname(family_labels[group1]),
+    Family_2 = unname(family_labels[group2]),
+    P_value_format = ifelse(
+      p < 0.001, "< 0.001",
+      sprintf("%.4f", p)
+    ),
+    P_adjusted_format = ifelse(
+      p.adj < 0.001, "< 0.001",
+      sprintf("%.4f", p.adj)
+    )
+  ) %>%
+  transmute(
+    Transcript,
+    Comparison = paste(Family_1, "vs", Family_2),
+    P_value = p,
+    P_adjusted_BH = p.adj,
+  ) %>%
+  arrange(Transcript, P_adjusted_BH)
+
+# Table hpu_hpy vs Other
+table_hpu_hpy <- wilcox_results %>%
+  mutate(
+    Comparison = "hpu_hpy vs Other",
+    P_value_format = ifelse(
+      P_value < 0.001, "< 0.001",
+      sprintf("%.4f", P_value)
+    ),
+    Significance = case_when(
+      P_value < 0.001 ~ "***",
+      P_value < 0.01 ~ "**",
+      P_value < 0.05 ~ "*",
+      TRUE ~ "ns"
+    )
+  ) %>%
+  dplyr::select(
+    Transcript,
+    Comparison,
+    P_value,
+    Significance
+  )
+
+
+# Table of global transcription comparison (Wilcoxon test)
+table_global_transcription <- table_global_transcription %>%
+  mutate(
+    P_value_format = ifelse(
+      P_value < 0.001, "< 0.001",
+      sprintf("%.4f", P_value)
+    )
+  ) %>%
+  dplyr::select(
+    Comparison,
+    Statistic,
+    P_value,
+    Significance
+  )
+
+# Table of comparison between the same family group genic vs intergenic (Wilcoxon test)
+table_family_transcription <- family_transcription_tests %>%
+  transmute(
+    Family = unname(family_labels[FamilyGroup]),
+    P_value,
+    P_adjusted_BH,
+   Significance
+  ) %>%
+  arrange(P_adjusted_BH)
+
+# Creation of excel file
+wb <- createWorkbook()
+tables <- list(
+  "Kruskal_Wallis" = table_kruskal,
+  "Family_comparisons" = table_pairwise,
+  "hpu_hpy_vs_Other" = table_hpu_hpy,
+  "Global_Transcription" = table_global_transcription,
+  "Transcription_by_family" = table_family_transcription
+)
+
+header_style <- createStyle(
+  fontColour = "white",
+  fgFill = "black",
+  textDecoration = "bold",
+  halign = "center",
+  border = "Bottom"
+)
+
+for (sheet_name in names(tables)) {
+  addWorksheet(wb, sheet_name)
+  writeData(
+    wb,
+    sheet_name,
+    tables[[sheet_name]]
+  )
+  n_cols <- ncol(tables[[sheet_name]])
+  addStyle(
+    wb,
+    sheet_name,
+    header_style,
+    rows = 1,
+    cols = 1:n_cols,
+    gridExpand = TRUE
+  )
+  freezePane(
+    wb,
+    sheet_name,
+    firstRow = TRUE
+  )
+  addFilter(
+    wb,
+    sheet_name,
+    rows = 1,
+    cols = 1:n_cols
+  )
+  setColWidths(
+    wb,
+    sheet_name,
+    cols = 1:n_cols,
+    widths = "auto"
+  )
+}
+
+# Save the table
+output_file <- "/statistical/results/excel/output/path"
+
+saveWorkbook(wb,output_file,overwrite = TRUE)
+
+cat("Excel saved:", output_file)
+
+#############################################################################################################
+
+```
