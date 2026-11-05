@@ -1,0 +1,337 @@
+---
+title: "Boxplot of hPu/hPy RPKM signal across Non-transformed and transformed cell lines"
+---
+
+######################################################################################################
+# Gustave Roussy (GR) | CNRS UMR 9019, Genome dynamics and maintenance Lab - Gabriel MATOS RODRIGUES 
+# Developed by BEKKOUCHE Louisa - bekkouche.louisa@gmail.com                                 
+# Edited by: Genome dynamics and maintenance Lab                                     
+# v.0.1 - 2025/12/18 (for Human genome) | v.0.2 2026/02/16 (for Mouse genenome)	     
+# R version 4.6.1 (2026-06)                                                       
+# MIT licence - Copyright (c) 2026 Gabriel Matos Rodrigues			                     
+# run it in a env conda for R version and enjoy your results! :)                     
+#######################################################################################################
+
+```{r}
+
+#############################################################################################################
+
+# END-seq signal quantification at hPu/hPy repeat loci
+# - Imports repeat-associated peak coordinates from BED files
+# - Extracts END-seq signal from BigWig tracks
+# - Extends peak regions by ±100 bp around peak centers
+# - Computes signal intensity per kilobase for each repeat locus
+# - Normalizes signal by S-phase fraction and doubling time
+# - Compares non-transformed and transformed cell lines
+# - Performs Wilcoxon statistical testing with BH correction
+# - Generates individual and combined boxplot visualizations
+# - Annotates plots with median values and adjusted p-values
+# - Saves all figures in publication-ready format
+#
+# Requirements:
+#   - GenomicRanges
+#   - rtracklayer
+#   - dplyr
+#   - ggplot2
+#   - tidyr
+#   - data.table
+#   - rstatix
+#   - openxlsx
+
+#############################################################################################################
+
+# Packages installation CRAN + BIOCONDUCTOR
+cran_pkgs <- c(
+  "dplyr",
+  "ggplot2",
+  "tidyr"
+)
+
+bioc_pkgs <- c(
+  "GenomicRanges",
+  "rtracklayer"
+)
+
+# Utility function: install only missing CRAN packages
+install_missing_cran <- function(pkgs) {
+  missing <- pkgs[!pkgs %in% installed.packages()[, "Package"]]
+  if (length(missing) > 0) {
+    install.packages(
+      missing,
+      repos = "https://cloud.r-project.org"
+    )
+  }
+}
+
+# Utility function: install only missing Bioconductor packages
+install_missing_bioc <- function(pkgs) {
+  if (!requireNamespace("BiocManager", quietly = TRUE)) {
+    install.packages(
+      "BiocManager",
+      repos = "https://cloud.r-project.org"
+    )
+  }
+
+  missing <- pkgs[!pkgs %in% installed.packages()[, "Package"]]
+  if (length(missing) > 0) {
+    BiocManager::install(
+      missing,
+      ask = FALSE,
+      update = FALSE
+    )
+  }
+}
+
+# Install missing packages
+install_missing_cran(cran_pkgs)
+install_missing_bioc(bioc_pkgs)
+
+message("All required packages are installed.")
+
+# Load libraries
+library(dplyr)
+library(ggplot2)
+library(GenomicRanges)
+library(rtracklayer)
+library(tidyr)
+
+#############################################################################################################
+
+# Peak bed files
+peak_nt_file <- "/ENDseq/peaks/cleaned/hPuhPy/bed/file/path"
+peak_tr_file <- "/ENDseq/peaks/cleaned/hPuhPy/bed/file/path"
+
+nt_bw <- "/ENDseq/bw/file/path"
+tr_bw <- "/ENDseq/bw/file/path"
+
+# S phase fraction and Doubling-time fraction
+Sphase_NT <-  # S phase fraction of non-transformed cell line
+Sphase_TRANSF <- # S phase fraction of transformed cell line
+
+dt_NT <- # Doubling-time fraction of non-transformed cell line
+dt_TRANSF <- # Doubling-time fraction of transformed cell line
+
+  
+# Function to calculate the RPKM for each cell line
+compute_bw_signal <- function(peak_file, bw_file) {
+  peak_df <- read.table(
+    peak_file,
+    sep = "\t",
+    header = FALSE,
+    stringsAsFactors = FALSE
+  )
+
+  peaks <- GRanges(
+    seqnames = peak_df[,1],
+    ranges = IRanges(
+      start = peak_df[,2],
+      end   = peak_df[,3]
+    )
+  )
+
+  # Extension ±100 bp around the repeat peak center
+  peaks <- resize(
+    peaks,
+    width = width(peaks) + 200,
+    fix = "center"
+  )
+
+  start(peaks) <- pmax(1, start(peaks))
+
+  bw <- import(
+    bw_file,
+    which = peaks,
+    as = "GRanges"
+  )
+
+  ov <- findOverlaps(peaks, bw)
+
+  signal <- tapply(
+    score(bw)[subjectHits(ov)] *
+      width(bw)[subjectHits(ov)],
+    queryHits(ov),
+    sum
+  )
+
+  peaks$signal <- 0
+
+  if(!is.null(signal)) {
+    peaks$signal[as.numeric(names(signal))] <- signal
+  }
+
+  peaks$signal_per_kb <-
+    peaks$signal / (width(peaks) / 1000)
+
+  as.data.frame(peaks)
+} 
+
+# NT (non-transformed) condition
+nt_res <- compute_bw_signal(
+  peak_nt_file,
+  nt_bw
+)
+nt_res$Condition <- "NT"
+
+# TRANSF (transformed) condition
+tr_res <- compute_bw_signal(
+  peak_tr_file,
+  tr_bw
+)
+tr_res$Condition <- "TRANSF"
+
+# Merge of the 2 conditions
+res <- bind_rows(
+  nt_res,
+  tr_res
+)
+
+# Normalization by S phase
+res$signal_Snorm <- ifelse(
+  res$Condition == "NT",
+  res$signal_per_kb / Sphase_NT,
+  res$signal_per_kb / Sphase_TRANSF
+)
+
+# Normalization by doubling-time
+res$dt_norm <- ifelse(
+  res$Condition == "NT",
+  res$signal_per_kb / dt_NT,
+  res$signal_per_kb / dt_TRANSF
+)
+
+# Plot preparation
+plot_df <- bind_rows(
+
+  res %>%
+    transmute(
+      Condition,
+      Value = signal_per_kb,
+      Metric = "Raw signal"
+    ),
+
+  res %>%
+    transmute(
+      Condition,
+      Value = signal_Snorm,
+      Metric = "S-phase normalized"
+    ),
+
+  res %>%
+    transmute(
+      Condition,
+      Value = dt_norm,
+      Metric = "Doubling-time normalized"
+    )
+)
+
+plot_df$Metric <- factor(
+  plot_df$Metric,
+  levels = c(
+    "Raw signal",
+    "S-phase normalized",
+    "Doubling-time normalized"
+  )
+)
+
+# Statistics (Wilcoxon test)
+# Calculation of adjusted p-values (BH procedure)
+stat_df <- plot_df %>%
+  group_by(Metric) %>%
+  summarise(
+    p = wilcox.test(Value ~ Condition)$p.value,
+    ymax = quantile(Value, 0.95, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    x = 1.5,
+    p.adj = p.adjust(p, method = "BH"),
+    p.plot = pmax(p.adj, .Machine$double.xmin),
+    label = paste0(
+      "adj. p = ",
+      sprintf("%.3e", p.plot)
+    ),
+    y = ymax * 1.05,
+    ybracket = ymax * 1.00,
+    ytip = ymax * 0.97
+  )
+
+# Function to make plots
+make_plot <- function(metric_name, ylab_text){
+  dat <- filter(
+    plot_df,
+    Metric == metric_name
+  )
+  stat <- filter(
+    stat_df,
+    Metric == metric_name
+  )
+
+  ggplot(dat,aes(x = Condition,y = Value)) +
+    geom_boxplot(aes(color = Condition),fill = "white",linewidth = 0.8,outlier.shape = NA) +
+    stat_summary(fun = median,geom = "text",aes(label = round(after_stat(y), 2)),color = "black",size = 3,vjust = -0.7) +
+    annotate("text",x = stat$x,y = stat$y,label = stat$label,size = 4) +
+    annotate("segment",x = 1,xend = 2,y = stat$ybracket,yend = stat$ybracket) +
+    annotate("segment",x = 1,xend = 1,y = stat$ybracket,yend = stat$ytip) +
+    annotate("segment",x = 2,xend = 2,y = stat$ybracket,yend = stat$ytip) +
+    scale_x_discrete(labels = c(NT = "cellline_name",TRANSF = "cellline_name")) +
+    scale_color_manual(values = c(NT = "black",TRANSF = "red")) +
+    theme_classic(base_size = 12) +
+    theme(legend.position = "none") +
+    xlab("") +
+    ylab(ylab_text) +
+    scale_y_continuous(expand = expansion(mult = c(0.02, 0.25)))
+}
+
+# Individual plots
+p1 <- make_plot(
+  "Raw signal", # metric name
+  "hPu/hPy RPKM signal") # y axis name
+
+p2 <- make_plot(
+  "S-phase normalized", # metric name
+  "hPu/hPy RPKM signal normalized by S-phase fraction") # y axis name
+
+p3 <- make_plot(
+  "Doubling-time normalized", # metric name
+  "hPu/hPy RPKM signal normalized by doubling time") # y axis name
+
+# Common plot
+plot_df_plot <- plot_df %>%
+  group_by(Metric) %>%
+  filter(
+    Value <= quantile(
+      Value,
+      0.95,
+      na.rm = TRUE
+    )
+  ) %>%
+  ungroup()
+
+p_all <- ggplot(plot_df_plot,aes(x = Condition,y = Value)) +
+  geom_boxplot(aes(color = Condition),fill = "white",linewidth = 0.8,outlier.shape = NA) +
+  geom_text(data = stat_df,aes(x = x,y = y,label = label),inherit.aes = FALSE,size = 3.5) +
+  geom_segment(data = stat_df,aes(x = 1,xend = 2,y = ybracket,yend = ybracket),inherit.aes = FALSE) +
+  geom_segment(data = stat_df,aes(x = 1,xend = 1,y = ybracket,yend = ytip),inherit.aes = FALSE) +
+  geom_segment(data = stat_df,aes(x = 2,xend = 2,y = ybracket,yend = ytip),inherit.aes = FALSE) +
+  facet_wrap(~Metric,scales = "free_y",nrow = 1) +
+  coord_cartesian(clip = "off") +
+  scale_y_continuous(expand = expansion(mult = c(0.02, 0.15))) +
+  scale_x_discrete(labels = c(NT = "cellline_name",TRANSF = "cellline_name")) +
+  scale_color_manual(values = c(NT = "black",TRANSF = "red")) +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "none",strip.background = element_blank(),strip.text = element_text()) +
+  xlab("") +
+  ylab("hPu/hPy RPKM signal") 
+
+
+print(p_all)
+
+# Save the plots
+ggsave("/output/plot1/path",p1,width = 6,height = 5)
+ggsave("/output/plot2/path",p2,width = 6,height = 5)
+ggsave("/output/plot3/path",p3,width = 6,height = 5)
+ggsave("/output/plot_all/path",p_all,width = 8,height = 3)
+
+#############################################################################################################
+
+```
