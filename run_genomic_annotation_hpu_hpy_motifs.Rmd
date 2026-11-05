@@ -1,0 +1,291 @@
+---
+title: "Genomic annotation barplot of hPu-hPy repeats"
+---
+
+######################################################################################################
+# Gustave Roussy (GR) | CNRS UMR 9019, Genome dynamics and maintenance Lab - Gabriel MATOS RODRIGUES 
+# Developed by BEKKOUCHE Louisa - bekkouche.louisa@gmail.com                                 
+# Edited by: Genome dynamics and maintenance Lab                                     
+# v.0.1 - 2025/12/18 (for Human genome) | v.0.2 2026/02/16 (for Mouse genenome)	     
+# R version 4.6.1 (2026-06)                                                       
+# MIT licence - Copyright (c) 2026 Gabriel Matos Rodrigues			                     
+# run it in a env conda for R version and enjoy your results! :)                     
+#######################################################################################################
+
+```{r}
+
+#############################################################################################################
+
+# Genomic annotation analysis of strand-biased hPu-hPy repeat loci
+# - Imports hPu and hPy repeat datasets associated with positive and negative replication fork orientation
+# - Loads repeat coordinates from BED files and computes repeat lengths
+# - Groups related repeat motifs into biologically relevant motif families
+# - Classifies repeat loci according to replication fork directionality (Pos or Neg)
+# - Annotates repeat regions relative to genes using ChIPseeker and GENCODE-derived gene models
+# - Assigns repeats to genomic features including promoters, exons, introns, and intergenic regions
+# - Simplifies genomic annotations into genic and intergenic categories
+# - Quantifies the distribution of repeat families across genomic annotations
+# - Compares genomic localization patterns between positively and negatively replicated repeat sets
+# - Calculates annotation frequencies and proportions for each repeat-family group
+# - Generates faceted stacked barplots displaying genomic feature enrichment
+# - Separately visualizes genic and intergenic repeat distributions
+# - Exports figure in PDF format
+#
+# Requirements:
+#   - dplyr
+#   - ggplot2
+#   - scales
+#   - stringr
+#   - tidyr
+#   - GenomicRanges
+#   - IRanges
+#   - ChIPseeker
+#   - TxDb.Hsapiens.UCSC.hg19.knownGene
+#   - org.Hs.eg.db
+
+#############################################################################################################
+
+# Install required packages
+# Load libraries
+
+# Packages installation (CRAN + Bioconductor)
+cran_pkgs <- c(
+  "dplyr",
+  "ggplot2",
+  "scales",
+  "stringr",
+  "tidyr"
+)
+
+bioc_pkgs <- c(
+  "GenomicRanges",
+  "ChIPseeker",
+  "TxDb.Hsapiens.UCSC.hg19.knownGene",
+  "org.Hs.eg.db"
+)
+
+# Utility function: install only missing CRAN packages
+install_missing_cran <- function(pkgs) {
+  missing <- pkgs[!pkgs %in% installed.packages()[, "Package"]]
+  if (length(missing) > 0) {
+    install.packages(
+      missing,
+      repos = "https://cloud.r-project.org"
+    )
+  }
+}
+
+# Utility function: install only missing Bioconductor packages
+install_missing_bioc <- function(pkgs) {
+  if (!requireNamespace("BiocManager", quietly = TRUE)) {
+    install.packages(
+      "BiocManager",
+      repos = "https://cloud.r-project.org"
+    )
+  }
+
+  missing <- pkgs[!pkgs %in% installed.packages()[, "Package"]]
+  if (length(missing) > 0) {
+    BiocManager::install(
+      missing,
+      ask = FALSE,
+      update = FALSE
+    )
+  }
+}
+
+# Install missing packages
+install_missing_cran(cran_pkgs)
+install_missing_bioc(bioc_pkgs)
+
+message("All required packages are installed.")
+
+#############################################################################################################
+
+# Load libraries
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(stringr)
+library(tidyr)
+library(GenomicRanges)
+library(ChIPseeker)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(org.Hs.eg.db)
+
+# User inputs (paths to BED files)
+
+bed_hPu_neg_path <- "/hPu/OKseq/neg/bed/file/path"
+bed_hPy_neg_path <- "/hPy/OKseq/neg/bed/file/path"
+
+bed_hPu_pos_path <- "/hPu/OKseq/pos/bed/file/path"
+bed_hPy_pos_path <- "/hPy/OKseq/pos/bed/file/path"
+
+txdb <- TxDb.Hsapiens.UCSC.hg19.knownGene
+
+# Read bed files
+read_bed_strict <- function(path) {
+  df <- read.table(path, sep = "\t", header = FALSE, stringsAsFactors = FALSE)
+  colnames(df) <- c("chrom", "start", "end", "motif")
+  df
+}
+
+bed_hPu_neg <- read_bed_strict(bed_hPu_neg_path)
+bed_hPy_neg <- read_bed_strict(bed_hPy_neg_path)
+bed_hPu_pos <- read_bed_strict(bed_hPu_pos_path)
+bed_hPy_pos <- read_bed_strict(bed_hPy_pos_path)
+
+# Processing
+process_bed <- function(df, sample_name){
+  df$length_bp <- df$end - df$start
+  df$sample <- sample_name
+  df
+}
+
+bed_hPu_neg <- process_bed(bed_hPu_neg, "hPu Neg")
+bed_hPy_neg <- process_bed(bed_hPy_neg, "hPy Neg")
+bed_hPu_pos <- process_bed(bed_hPu_pos, "hPu Pos")
+bed_hPy_pos <- process_bed(bed_hPy_pos, "hPy Pos")
+
+bed_all <- rbind(
+  bed_hPu_neg, bed_hPy_neg,
+  bed_hPu_pos, bed_hPy_pos
+)
+
+# Grouping
+bed_filtered <- bed_all %>%
+  mutate(
+    motif_clean = str_replace_all(motif, " ", ""),
+    group = case_when(
+      motif_clean %in% c("(GA)n","(AG)n") ~ "(GA)n",
+      motif_clean %in% c("(GAA)n","(AAG)n","(AGA)n") ~ "(GAA)n",
+      motif_clean %in% c("(GAAA)n","(AAAG)n","(AAGA)n","(AGAA)n") ~ "(GAAA)n",
+      motif_clean %in% c("(GGAA)n","(GAAG)n","(AAGG)n","(AGGA)n",
+                         "(GAAAA)n","(AAAAG)n","(AAAGA)n","(AAGAA)n","(AGAAA)n") ~ "(GAAAA)n",
+      motif_clean %in% c("(TC)n","(CT)n") ~ "(TC)n",
+      motif_clean %in% c("(TCT)n","(TTC)n","(CTT)n") ~ "(TTC)n",
+      motif_clean %in% c("(TTTC)n","(CTTT)n","(TCTT)n","(TTCT)n") ~ "(TTTC)n",
+      motif_clean %in% c("(TTCC)n","(CCTT)n","(TCCT)n","(CTTC)n",
+                         "(CTTTT)n","(TTTTC)n","(TTTCT)n","(TTCTT)n","(TCTTT)n") ~ "(TTTTC)n",
+      TRUE ~ "Other"
+    ),
+    category = case_when(
+      grepl("Pos$", sample) ~ "Pos",
+      grepl("Neg$", sample) ~ "Neg"
+    )
+  )
+
+# Annotation of repeat motifs to genomic regions
+# Add a unique identifier to each repeat
+bed_filtered$id <- 1:nrow(bed_filtered)
+
+# Convert repeats to GRanges object
+gr <- GRanges(
+  seqnames = bed_filtered$chrom,
+  ranges = IRanges(
+    start = bed_filtered$start,
+    end   = bed_filtered$end
+  ),
+  id = bed_filtered$id
+)
+
+# Annotate repeats relative to genes (hg19)
+peakAnno <- annotatePeak(
+  gr,
+  TxDb = txdb,
+  tssRegion = c(-1000, 1000),
+  annoDb = "org.Hs.eg.db"
+)
+
+anno_df <- as.data.frame(peakAnno)
+
+# Simplify genomic annotations into four categories
+anno_df$annotation_simple <- case_when(
+  grepl("Promoter", anno_df$annotation) ~ "Promoter",
+  grepl("Exon", anno_df$annotation) ~ "Exon",
+  grepl("Intron", anno_df$annotation) ~ "Intron",
+  TRUE ~ "Intergenic"
+)
+
+# Merge annotation results with repeat information
+bed_annot <- bed_filtered %>%
+  inner_join(
+    anno_df[, c("id", "annotation_simple")],
+    by = "id"
+  )
+
+# Classify repeats as genic or intergenic
+bed_annot <- bed_annot %>%
+  mutate(
+    region_type = ifelse(
+      annotation_simple == "Intergenic",
+      "Intergenic",
+      "Genic"
+    )
+  )
+
+# Prepare data for visualization
+plot_df <- bed_annot %>%
+  mutate(
+    annotation_plot = case_when(
+      region_type == "Intergenic" ~ "Intergenic",
+      TRUE ~ annotation_simple
+    )
+  ) %>%
+  count(
+    group,
+    category,
+    region_type,
+    annotation_plot
+  ) %>%
+  group_by(
+    group,
+    category,
+    region_type
+  ) %>%
+  mutate(prop = n / sum(n)) %>%
+  ungroup()
+
+# Keep only strand-biased repeat sets
+plot_posneg <- plot_df %>%
+  filter(category %in% c("Pos", "Neg"))
+
+# Define annotation order
+plot_posneg$annotation_plot <- factor(
+  plot_posneg$annotation_plot,
+  levels = c(
+    "Promoter",
+    "Exon",
+    "Intron",
+    "Intergenic"
+  )
+)
+
+# Define panel order
+plot_posneg$category <- factor(
+  plot_posneg$category,
+  levels = c("Pos", "Neg")
+)
+
+# Stacked barplot of genomic annotations
+p <- ggplot(plot_posneg,aes(x = group,y = n,fill = annotation_plot)) +
+  geom_bar(stat = "identity",color = "black") +
+  facet_grid(region_type ~ category) +
+  labs(x = "",y = "Count of repeats",fill = "Genomic location") +
+  scale_fill_manual(values = c("Promoter" = "black","Exon" = "grey60","Intergenic" = "antiquewhite3")) +
+  theme_classic(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45,hjust = 1))
+
+p
+
+# Export figure
+ggsave(
+  "barplot_annotation_negpos.pdf",
+  plot = p,
+  width = 9,
+  height = 6
+)
+
+#############################################################################################################
+
+```
