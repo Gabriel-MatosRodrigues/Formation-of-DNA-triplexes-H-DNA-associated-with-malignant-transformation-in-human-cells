@@ -1,0 +1,273 @@
+---
+title: "Boxplot of repli-seq data in high RFD hPu-hPy regions"
+---
+
+######################################################################################################
+# Gustave Roussy (GR) | CNRS UMR 9019, Genome dynamics and maintenance Lab - Gabriel MATOS RODRIGUES 
+# Developed by BEKKOUCHE Louisa - bekkouche.louisa@gmail.com                                 
+# Edited by: Genome dynamics and maintenance Lab                                     
+# v.0.1 - 2025/12/18 (for Human genome) | v.0.2 2026/02/16 (for Mouse genenome)	     
+# R version 4.6.1 (2026-06)                                                       
+# MIT licence - Copyright (c) 2026 Gabriel Matos Rodrigues			                     
+# run it in a env conda for R version and enjoy your results! :)                     
+#######################################################################################################
+
+
+```{r}
+
+#############################################################################################################
+
+# Replication timing profiling of hPu-hPy repeat-associated regions
+# - Imports whole-genome and hPu-hPy-associated genomic coordinates
+# - Loads Repli-seq BigWig tracks from four S-phase fractions (S1-S4)
+# - Quantifies replication timing signal across each genomic interval
+# - Calculates Early and Late replication scores from Repli-seq data
+# - Computes replication timing as log2(Early/Late)
+# - Compares replication timing between genome-wide regions and hPu-hPy-associated loci
+# - Distinguishes hPu and hPy repeats according to replication fork orientation (POS/NEG)
+# - Summarizes replication timing distributions using median values
+# - Generates boxplots with P10-P90 whiskers and median annotations
+# - save the figure
+#
+# Requirements:
+#   - GenomicRanges
+#   - IRanges
+#   - rtracklayer
+#   - dplyr
+#   - ggplot2
+
+#############################################################################################################
+
+# Packages installation CRAN + BIOCONDUCTOR
+cran_pkgs <- c(
+  "dplyr",
+  "ggplot2",
+)
+
+bioc_pkgs <- c(
+  "GenomicRanges",
+  "rtracklayer"
+)
+
+# Utility function: install only missing CRAN packages
+install_missing_cran <- function(pkgs) {
+  missing <- pkgs[!pkgs %in% installed.packages()[, "Package"]]
+  if (length(missing) > 0) {
+    install.packages(
+      missing,
+      repos = "https://cloud.r-project.org"
+    )
+  }
+}
+
+# Utility function: install only missing Bioconductor packages
+install_missing_bioc <- function(pkgs) {
+  if (!requireNamespace("BiocManager", quietly = TRUE)) {
+    install.packages(
+      "BiocManager",
+      repos = "https://cloud.r-project.org"
+    )
+  }
+
+  missing <- pkgs[!pkgs %in% installed.packages()[, "Package"]]
+  if (length(missing) > 0) {
+    BiocManager::install(
+      missing,
+      ask = FALSE,
+      update = FALSE
+    )
+  }
+}
+
+# Install missing packages
+install_missing_cran(cran_pkgs)
+install_missing_bioc(bioc_pkgs)
+
+message("All required packages are installed.")
+
+# Load libraries
+library(dplyr)
+library(ggplot2)
+library(GenomicRanges)
+library(rtracklayer)
+
+#############################################################################################################
+
+# Function to calculate the replication timing for a bed file
+analyse_RT <- function(bed_file, nom_dataset){
+  cat("Analyse :", nom_dataset, "\n")
+  rep <- read.table(
+    bed_file,
+    sep = "\t",
+    header = FALSE,
+    stringsAsFactors = FALSE
+  )
+  colnames(rep)[1:4] <- c(
+    "chr",
+    "start",
+    "end",
+    "motif"
+  )
+  rep_gr <- GRanges(
+    seqnames = rep$chr,
+    ranges = IRanges(
+      start = rep$start + 1,
+      end = rep$end
+    )
+  )
+  fractions <- c("S1","S2","S3","S4")
+  for(f in fractions){
+    message("  Import ", f)
+    bw <- import(
+      file.path(
+        "/repliseq/bw/file/path",
+        paste0(
+          "cellline_name",
+          f,
+          "PctSignalRep1.bigWig"
+        )
+      )
+    )
+
+    ov <- findOverlaps(rep_gr, bw)
+    moy <- tapply(
+      score(bw)[subjectHits(ov)],
+      queryHits(ov),
+      mean,
+      na.rm = TRUE
+    )
+    signal <- rep(
+      NA_real_,
+      length(rep_gr)
+    )
+    signal[as.numeric(names(moy))] <- moy
+
+    mcols(rep_gr)[[f]] <- signal
+  }
+
+  df <- as.data.frame(rep_gr)
+
+  df$Early <- df$S1 + df$S2
+  df$Late  <- df$S3 + df$S4
+
+  df$RT_log2 <- log2(
+    (df$Early + 0.01) /
+    (df$Late + 0.01)
+  )
+
+  df$condition <- nom_dataset
+
+  df <- subset(
+    df,
+    !is.na(RT_log2)
+  )
+
+  return(df)
+}
+
+# Analysis of the bed with Okseq results (pos/neg) overlapped with hpu-hpy regions
+
+# Whole genome 
+rt_whole <- analyse_RT("/hg19_hDNA_repeats/bed/file/path",
+                       "Genome-wide")
+
+rt_hPu_neg <- analyse_RT(
+  "/path/to/hpu/neg/bed/file",
+  "hPu_NEG"
+)
+
+rt_hPy_neg <- analyse_RT(
+  "/path/to/hpy/neg/bed/file",
+  "hPy_NEG"
+)
+
+rt_hPu_pos <- analyse_RT(
+  "/path/to/hpu/pos/bed/file",
+  "hPu_POS"
+)
+
+rt_hPy_pos <- analyse_RT(
+  "/path/to/hpy/pos/bed/file",
+  "hPy_POS"
+)
+
+# Fusion of all the files
+all_df <- rbind(
+  rt_hPu_neg,
+  rt_hPy_neg,
+  rt_hPu_pos,
+  rt_hPy_pos,
+  rt_whole
+)
+
+table(all_df$condition)
+
+# RT median per condition
+res <- aggregate(
+  RT_log2 ~ condition,
+  data = all_df,
+  median,
+  na.rm = TRUE
+)
+
+res <- res[order(res$RT_log2), ]
+
+# Boxplot
+# Group order
+
+all_df$condition <- factor(
+  all_df$condition,
+  levels = c(
+    "Genome-wide",
+    "hPy_POS",
+    "hPu_POS",
+    "hPy_NEG",
+    "hPu_NEG"
+  )
+)
+
+# Colors
+contour_colors <- c(
+  "hPu_NEG" = "springgreen4",
+  "hPy_NEG" = "firebrick",
+  "hPu_POS" = "springgreen4",
+  "hPy_POS" = "firebrick",
+  "Genome-wide" = "black"
+)
+
+# Boxplot with P10-P90
+q_box <- function(y) {
+  data.frame(
+    ymin   = quantile(y, 0.10, na.rm = TRUE),
+    lower  = quantile(y, 0.25, na.rm = TRUE),
+    middle = quantile(y, 0.50, na.rm = TRUE),
+    upper  = quantile(y, 0.75, na.rm = TRUE),
+    ymax   = quantile(y, 0.90, na.rm = TRUE)
+  )
+}
+
+# Medians
+stats_df <- all_df %>%
+  group_by(condition) %>%
+  summarise(
+    median_RT = median(RT_log2, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Plot
+p_RT <- ggplot(all_df,aes(x = condition,y = RT_log2,color = condition)) +
+  stat_summary(fun.data = q_box,geom = "boxplot",width = 0.9,size = 0.6,fill = "white") +
+  geom_text(data = stats_df,aes( x = condition,y = median_RT, label = paste0("Median: ",round(median_RT, 2))),inherit.aes = FALSE,size = 3,color = "black",vjust = -0.6) +
+  scale_color_manual(values = contour_colors) +
+  labs(x = "",y = "RT score [log2(Early/Late)]") +
+  theme_classic(base_size = 14) +
+  theme(legend.position = "none")
+
+print(p_RT)
+
+# Save the plot
+ggsave(filename = "/output/plot/path",plot = p_RT,width = 7,height = 3,units = "in")
+
+#############################################################################################################
+
+```
