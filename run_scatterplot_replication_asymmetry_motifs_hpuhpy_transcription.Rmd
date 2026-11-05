@@ -1,5 +1,5 @@
 ---
-title: "Scatterplot of replication asymmetry pos/neg OKseq plot (transcription)"
+title: "Scatterplot of replication asymmetry pos/neg in OKseq data (transcription)"
 ---
 
 ######################################################################################################
