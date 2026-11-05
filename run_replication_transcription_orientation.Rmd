@@ -1,0 +1,555 @@
+---
+title: "Barplot of replication/transcription orientation"
+---
+
+######################################################################################################
+# Gustave Roussy (GR) | CNRS UMR 9019, Genome dynamics and maintenance Lab - Gabriel MATOS RODRIGUES 
+# Developed by BEKKOUCHE Louisa - bekkouche.louisa@gmail.com                                 
+# Edited by: Genome dynamics and maintenance Lab                                     
+# v.0.1 - 2025/12/18 (for Human genome) | v.0.2 2026/02/16 (for Mouse genenome)	     
+# R version 4.6.1 (2026-06)                                                       
+# MIT licence - Copyright (c) 2026 Gabriel Matos Rodrigues			                     
+# run it in a env conda for R version and enjoy your results! :)                     
+#######################################################################################################
+
+```{r}
+
+#############################################################################################################
+
+# Replication-transcription orientation analysis using OK-seq data
+# - Imports transcript annotations from a GTF file
+# - Converts transcript coordinates into GRanges objects
+# - Loads high-RFD OK-seq regions from multiple cell lines
+# - Identifies positive and negative replication fork directionality domains
+# - Determines transcription-replication orientation relationships
+# - Classifies encounters as co-directional or head-on
+# - Calculates orientation frequencies for each cell line
+# - Generates a combined replication-directionality universe
+# - Performs separate analyses for hPu- and hPy-associated regions
+# - Computes orientation percentages across repeat categories
+# - Produces barplots and faceted visualizations
+# - Save all figures
+#
+# Requirements:
+#   - GenomicRanges
+#   - IRanges
+#   - dplyr
+#   - ggplot2
+#   - tidyr
+
+#############################################################################################################
+
+# Packages installation CRAN + BIOCONDUCTOR
+cran_pkgs <- c(
+  "dplyr",
+  "ggplot2",
+  "tidyr"
+)
+
+bioc_pkgs <- c(
+  "GenomicRanges"
+)
+
+# Utility function: install only missing CRAN packages
+install_missing_cran <- function(pkgs) {
+  missing <- pkgs[!pkgs %in% installed.packages()[, "Package"]]
+  if (length(missing) > 0) {
+    install.packages(
+      missing,
+      repos = "https://cloud.r-project.org"
+    )
+  }
+}
+
+# Utility function: install only missing Bioconductor packages
+install_missing_bioc <- function(pkgs) {
+  if (!requireNamespace("BiocManager", quietly = TRUE)) {
+    install.packages(
+      "BiocManager",
+      repos = "https://cloud.r-project.org"
+    )
+  }
+
+  missing <- pkgs[!pkgs %in% installed.packages()[, "Package"]]
+  if (length(missing) > 0) {
+    BiocManager::install(
+      missing,
+      ask = FALSE,
+      update = FALSE
+    )
+  }
+}
+
+# Install missing packages
+install_missing_cran(cran_pkgs)
+install_missing_bioc(bioc_pkgs)
+
+message("All required packages are installed.")
+
+# Load libraries
+library(dplyr)
+library(ggplot2)
+library(GenomicRanges)
+library(tidyr)
+
+#############################################################################################################
+
+# Barplot Replication/transcription orientation (all hPu-hPy repeats)
+
+# GTF file path : gencode.v19.annotation.gtf
+gtf <- read.delim(
+  "/gencode.v19.annotation.gtf/file/path",
+  header = FALSE,
+  comment.char = "#"
+)
+
+transcripts <- gtf[gtf$V3 == "transcript", ]
+
+transcripts_gr <- GRanges(
+  seqnames = transcripts$V1,
+  ranges = IRanges(
+    start = transcripts$V4,
+    end = transcripts$V5
+  ),
+  strand = transcripts$V7
+)
+
+# Function to read Okseq data
+read_okseq <- function(file){
+
+  df <- read.table(
+    file,
+    sep = "\t",
+    header = FALSE
+  )
+
+  colnames(df) <- c(
+    "chr",
+    "start",
+    "end",
+    "RFD"
+  )
+
+  list(
+    pos = GRanges(
+      seqnames = df$chr[df$RFD > 0],
+      ranges = IRanges(
+        start = df$start[df$RFD > 0] + 1,
+        end   = df$end[df$RFD > 0]
+      )
+    ),
+
+    neg = GRanges(
+      seqnames = df$chr[df$RFD < 0],
+      ranges = IRanges(
+        start = df$start[df$RFD < 0] + 1,
+        end   = df$end[df$RFD < 0]
+      )
+    )
+  )
+}
+
+# Import of Okseq bed files
+cellline1  <- read_okseq("/cellline1/Okseq/high/RFD/bed/file/path")
+cellline2  <- read_okseq("/cellline2/Okseq/high/RFD/bed/file/path")
+cellline3  <- read_okseq("/cellline3/Okseq/high/RFD/bed/file/path")
+cellline4 <- read_okseq("/cellline4/Okseq/high/RFD/bed/file/path")
+
+# Function to analyze Okseq data
+analyse_okseq <- function(name, pos_gr, neg_gr){
+  ov_pos <- findOverlaps(
+    transcripts_gr,
+    pos_gr
+  )
+
+  ov_neg <- findOverlaps(
+    transcripts_gr,
+    neg_gr
+  )
+
+  tx_pos <- unique(queryHits(ov_pos))
+  tx_neg <- unique(queryHits(ov_neg))
+
+  strand_pos <- as.character(
+    strand(transcripts_gr[tx_pos])
+  )
+
+  strand_neg <- as.character(
+    strand(transcripts_gr[tx_neg])
+  )
+
+  codirectional <-
+    sum(strand_pos == "+") +
+    sum(strand_neg == "-")
+
+  headon <-
+    sum(strand_pos == "-") +
+    sum(strand_neg == "+")
+
+  total <- codirectional + headon
+
+  data.frame(
+    Sample = name,
+    CoDirectional = codirectional,
+    HeadOn = headon,
+    CoDirectional_pct =
+      100 * codirectional / total,
+    HeadOn_pct =
+      100 * headon / total
+  )
+}
+
+res_cellline1 <- analyse_okseq(
+  "cellline1",
+  cellline1$pos,
+  cellline1$neg
+)
+
+res_cellline2 <- analyse_okseq(
+  "cellline2",
+  cellline2$pos,
+  cellline2$neg
+)
+
+res_cellline3 <- analyse_okseq(
+  "cellline3",
+  cellline3$pos,
+  cellline3$neg
+)
+
+res_cellline4 <- analyse_okseq(
+  "cellline4",
+  cellline4$pos,
+  cellline4$neg
+)
+
+
+# Univers OKseq
+pos_univers <- reduce(c(
+  cellline1$pos,
+  cellline2$pos,
+  cellline3$pos,
+  cellline4$pos
+))
+
+neg_univers <- reduce(c(
+  cellline1$neg,
+  cellline2$neg,
+  cellline3$neg,
+  cellline4$neg
+))
+
+res_univers <- analyse_okseq(
+  "Universe",
+  pos_univers,
+  neg_univers
+)
+
+summary_table <- rbind(
+  res_cellline1,
+  res_cellline2,
+  res_cellline3,
+  res_cellline4,
+  res_univers
+)
+
+print(summary_table)
+
+
+# Overlaps between transcription regions and Okseq data
+ov_pos <- findOverlaps(
+  transcripts_gr,
+  pos_univers
+)
+
+ov_neg <- findOverlaps(
+  transcripts_gr,
+  neg_univers
+)
+
+tx_pos <- unique(queryHits(ov_pos))
+tx_neg <- unique(queryHits(ov_neg))
+
+strand_pos <- as.character(
+  strand(transcripts_gr[tx_pos])
+)
+
+strand_neg <- as.character(
+  strand(transcripts_gr[tx_neg])
+)
+
+
+# Co-directional / Head-on
+codirectional <-
+  sum(strand_pos == "+") +
+  sum(strand_neg == "-")
+
+headon <-
+  sum(strand_pos == "-") +
+  sum(strand_neg == "+")
+
+res <- data.frame(
+  Orientation = c(
+    "Co-directional",
+    "Head-on"
+  ),
+  Count = c(
+    codirectional,
+    headon
+  )
+)
+
+res$Percent <- round(
+  100 * res$Count / sum(res$Count),
+  2
+)
+
+print(res)
+
+# Plot preparation 
+plot_df <- rbind(
+  data.frame(
+    Sample = summary_table$Sample,
+    Orientation = "Co-directional",
+    Percent = summary_table$CoDirectional_pct
+  ),
+  data.frame(
+    Sample = summary_table$Sample,
+    Orientation = "Head-on",
+    Percent = summary_table$HeadOn_pct
+  )
+)
+
+# Plot
+p <- ggplot(plot_df,aes(x = Sample,y = Percent,fill = Orientation)) +
+  geom_col(position = "dodge",width = 0.7,color = "black") +
+  scale_fill_manual(values = c("Co-directional" = "lightpink2","Head-on" = "cadetblue3")) +
+  ylim(0,100) +
+  labs(x = "",y = "Percentage of transcripts") +
+  theme_classic(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45,hjust = 1))
+
+print(p)
+
+# Save the plot
+ggsave(filename = "/output/plot/path",plot = p,width = 8,height = 4,units = "in")
+
+#############################################################################################################
+
+# Barplot Replication/transcription orientation hPu-hPy separated
+
+# GTF file path : gencode.v19.annotation.gtf
+gtf <- read.delim(
+  "/gencode.v19.annotation.gtf/file/path",
+  header = FALSE,
+  comment.char = "#"
+)
+
+# Transcrits
+transcripts <- gtf[gtf$V3 == "transcript",]
+
+transcripts_gr <- GRanges(
+  seqnames = transcripts$V1,
+  ranges = IRanges(
+    start = transcripts$V4,
+    end = transcripts$V5
+  ),
+  strand = transcripts$V7
+)
+
+
+# Function BED -> GRanges
+load_gr <- function(file){
+
+  df <- read.table(
+    file,
+    sep = "\t",
+    header = FALSE,
+    stringsAsFactors = FALSE
+  )
+
+  GRanges(
+    seqnames = df[,1],
+    ranges = IRanges(
+      start = df[,2] + 1,
+      end = df[,3]
+    )
+  )
+}
+
+# Function Co-directional / Head-on
+count_orientation <- function(tx_gr, ok_pos, ok_neg){
+  ov_pos <- findOverlaps(tx_gr, ok_pos)
+  ov_neg <- findOverlaps(tx_gr, ok_neg)
+
+  tx_pos <- unique(queryHits(ov_pos))
+  tx_neg <- unique(queryHits(ov_neg))
+
+  strand_pos <- as.character(
+    strand(tx_gr[tx_pos])
+  )
+
+  strand_neg <- as.character(
+    strand(tx_gr[tx_neg])
+  )
+
+  codirectional <-
+    sum(strand_pos == "+") +
+    sum(strand_neg == "-")
+
+  headon <-
+    sum(strand_pos == "-") +
+    sum(strand_neg == "+")
+
+  data.frame(
+    CoDirectional = codirectional,
+    HeadOn = headon
+  )
+}
+
+# Path with all the Okseq bed files (hPu-hPy separated and pos/neg separated)
+bed_dir <- "/Okseq/high/RFD/bed/file/path"
+
+files <- list.files(
+  bed_dir,
+  pattern = "\\.bed$",
+  full.names = TRUE
+)
+
+# Analysis function
+analyse_category <- function(category){
+
+  pos_files <- files[
+    grepl(
+      paste0("_pos_", category, "\\.bed$"),
+      files
+    )
+  ]
+
+  neg_files <- files[
+    grepl(
+      paste0("_neg_", category, "\\.bed$"),
+      files
+    )
+  ]
+
+  sample_names <- gsub(
+    paste0("_pos_", category, "\\.bed$"),
+    "",
+    basename(pos_files)
+  )
+
+  sample_names[
+    sample_names ==
+      "bed_file_patterns"
+  ] <- "cellline"
+
+  do.call(
+    rbind,
+    lapply(seq_along(pos_files), function(i){
+      sample_base <- gsub(
+        paste0("_pos_", category, "\\.bed$"),
+        "",
+        basename(pos_files[i])
+      )
+      neg_file <- neg_files[
+        gsub(
+          paste0("_neg_", category, "\\.bed$"),
+          "",
+          basename(neg_files)
+        ) == sample_base
+      ]
+
+      if(length(neg_file) == 0)
+        return(NULL)
+
+      pos_gr <- load_gr(pos_files[i])
+      neg_gr <- load_gr(neg_file)
+
+      tmp <- count_orientation(
+        transcripts_gr,
+        pos_gr,
+        neg_gr
+      )
+
+      data.frame(
+        Sample = sample_names[i],
+        Category = category,
+        tmp
+      )
+    })
+  )
+}
+
+# hPu-hPy analysis 
+res_hpu <- analyse_category("hpu")
+res_hpy <- analyse_category("hpy")
+
+summary_table <- rbind(
+  res_hpu,
+  res_hpy
+)
+
+
+# Percentage calculation 
+summary_table$Total <-
+  summary_table$CoDirectional +
+  summary_table$HeadOn
+
+summary_table$CoDirectional_pct <-
+  round(
+    100 *
+      summary_table$CoDirectional /
+      summary_table$Total,
+    2
+  )
+
+summary_table$HeadOn_pct <-
+  round(
+    100 *
+      summary_table$HeadOn /
+      summary_table$Total,
+    2
+  )
+
+summary_table$CellLine <- sub(
+  "_file_pattern.*",
+  "",
+  summary_table$Sample
+)
+
+
+# Plot preparation
+plot_df <- rbind(
+  data.frame(
+    CellLine = summary_table$CellLine,
+    Category = summary_table$Category,
+    Orientation = "Co-directional",
+    Percent = summary_table$CoDirectional_pct
+  ),
+  data.frame(
+    CellLine = summary_table$CellLine,
+    Category = summary_table$Category,
+    Orientation = "Head-on",
+    Percent = summary_table$HeadOn_pct
+  )
+)
+
+# Plot
+t <- ggplot(plot_df,aes( x = CellLine, y = Percent, fill = Orientation)) +
+  geom_col(position = "dodge", color = "black", width = 0.8) +
+  facet_wrap(~Category) +
+  scale_fill_manual(values = c("Co-directional" = "lightpink2","Head-on" = "cadetblue3")) +
+  ylim(0,100) +
+  labs(x = "",y = "Percentage of transcripts") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45,hjust = 1))
+
+print(t)
+
+# Save the plot
+ggsave(filename = "/output/plot/path",plot = t,width = 11,height = 4,units = "in")
+
+#############################################################################################################
+
+```
